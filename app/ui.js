@@ -127,7 +127,7 @@ function loadHash() {
   if (pts.length < 2) return false;
   for (const [k, id] of [['ac', 'aircraft'], ['alt', 'alt'], ['w', 'wind'], ['t', 'tod']]) if (q.get(k) && $(id).querySelector(`option[value="${q.get(k)}"]`)) $(id).value = q.get(k);
   state.route = pts; state.finished = true;
-  map.fitBounds(pts.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(pts[0], pts[0])), { padding: 80, maxZoom: 15 });
+  fitRoute(pts);
   $('wind').value === 'live' ? $('wind').dispatchEvent(new Event('change')) : score();
   return true;
 }
@@ -136,10 +136,17 @@ $('share').onclick = async () => {
   saveHash();
   try { await navigator.clipboard.writeText(location.href); toast('Link copied'); } catch { toast('Copy the address bar to share'); }
 };
+/** Frame a route; in the 3D view keep the oblique camera so the lane reads as altitude. */
+function fitRoute(pts) {
+  const b = pts.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds(pts[0], pts[0]));
+  const flat = view !== '3d';
+  map.fitBounds(b, { padding: 120, maxZoom: 15.2, pitch: flat ? 0 : 60, bearing: flat ? 0 : -20, duration: 1200 });
+}
 function loadSample(id) {
   const R = ROUTES.find(r => r.id === id);
   state.route = R.path.map(p => p.slice()); state.finished = true;
   $('aircraft').value = R.aircraft; $('alt').value = R.altFt; $('route').value = id;
+  fitRoute(state.route);
   score();
 }
 ['aircraft', 'alt', 'tod'].forEach(id => $(id).addEventListener('change', score));
