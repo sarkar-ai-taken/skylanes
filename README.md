@@ -4,7 +4,7 @@ Draw a delivery-drone route over Seattle and get a draft safety-case package: FA
 Monte Carlo failure footprints, expected ground fatalities per flight hour, obstacles, power lines, LAANC ceilings,
 heliports and stadium TFRs, noise, and an area of intended flight. All on real public data.
 
-**Live:** https://sarkar-chicory.github.io/skylanes-seattle/ · no sign-up, no API keys, runs entirely in the browser.
+**Live:** https://sarkar-ai-taken.github.io/skylanes/ · no sign-up, no API keys, runs entirely in the browser.
 Every analysis is a shareable link (the route and settings live in the URL).
 
 > Prototype for planning and discussion. Not an FAA product and not a filed document.
