@@ -5,7 +5,7 @@ import { prepare, scoreRoute, findings, verdict, density, faaCategory, isWater }
 import { ROUTES } from '../app/routes.js';
 
 const load = n => JSON.parse(readFileSync(new URL(`../app/data/${n}.json`, import.meta.url)));
-const D = prepare(Object.fromEntries(['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest'].map(n => [n, load(n)])));
+const D = prepare(Object.fromEntries(['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings'].map(n => [n, load(n)])));
 const route = id => ROUTES.find(r => r.id === id).path;
 
 test('water reads as water and downtown reads dense', () => {
@@ -59,4 +59,40 @@ test('package renders every section to HTML and Markdown', async () => {
   assert.ok(md.includes('**Category 5**'));
   assert.ok(html.includes('<strong>Category 5</strong>'));
   assert.ok(!html.includes('undefined') && !md.includes('NaN'));
+});
+
+test('a route straight through Columbia Center is caught as passing through a building', async () => {
+  const thru = [[-122.3330, 47.6045], [-122.3280, 47.6045]];
+  const r = scoreRoute(D, thru, { altFt: 300 });
+  assert.ok(r.buildings.some(b => b.dm === 0 && b.h_ft > 900), 'Columbia Center footprint hit');
+  assert.ok(r.blockedShare > 0);
+  assert.ok(findings(r).some(([s, t]) => s === 'crit' && t.includes('passes through')));
+});
+
+test('go around clears every building and obstacle at the route altitude', async () => {
+  const { planAround } = await import('../app/engine.js');
+  const thru = [[-122.3330, 47.6045], [-122.3280, 47.6045]];
+  const { route: out, failed } = planAround(D, thru, { altFt: 300 });
+  assert.equal(failed.length, 0);
+  const r = scoreRoute(D, out, { altFt: 300 });
+  const mid = r.samples.slice(2, -2); // launch and drop pads may sit beside towers
+  assert.equal(mid.filter(s => s.blocked).length, 0, `still blocked: ${mid.filter(s => s.blocked).length}`);
+  assert.ok(r.lenM < 1500, `detour stays reasonable: ${r.lenM} m`);
+});
+
+test('climb over raises only the legs that need it and respects 400 ft', async () => {
+  const { planClimb } = await import('../app/engine.js');
+  // Ballard: low ceilings do not apply; a 150 ft route over mid-rise blocks
+  const R = [[-122.3870, 47.6640], [-122.3830, 47.6680], [-122.3760, 47.6690]];
+  const { route: out } = planClimb(D, R, { altFt: 100 });
+  assert.ok(out.every(p => p[2] <= 400));
+  const r = scoreRoute(D, out, { altFt: 100 });
+  assert.equal(r.samples.filter(s => s.blocked).length, 0);
+});
+
+test('per-waypoint levels are honoured and interpolated', () => {
+  const r = scoreRoute(D, [[-122.3790, 47.6450, 200], [-122.3990, 47.6500, 400]], {});
+  assert.equal(r.altMin, 200); assert.equal(r.altMax, 400); assert.ok(r.levelled);
+  const mid = r.samples[Math.floor(r.samples.length / 2)].alt;
+  assert.ok(mid > 250 && mid < 350, `mid ${mid}`);
 });

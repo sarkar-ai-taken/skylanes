@@ -1,5 +1,5 @@
 // Map, controls and rail. All scoring lives in engine.js; all document text in package.js.
-import { AIRCRAFT, WIND_PRESETS, TOD, FT, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density } from './engine.js';
+import { AIRCRAFT, WIND_PRESETS, TOD, FT, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, MAX_ALT_FT } from './engine.js';
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
 import { createScene } from './scene3d.js';
@@ -10,7 +10,7 @@ const dark = () => document.documentElement.dataset.theme === 'dark' || (documen
 const fc = features => ({ type: 'FeatureCollection', features });
 const pt = (c, p = {}) => ({ type: 'Feature', properties: p, geometry: { type: 'Point', coordinates: c } });
 
-const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest'];
+const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings'];
 const raw = Object.fromEntries(await Promise.all(files.map(async n => [n, await (await fetch(`data/${n}.json`)).json()])));
 const D = prepare(raw);
 const M = raw.manifest;
@@ -82,6 +82,8 @@ map.on('load', () => {
   map.addLayer({ id: 'foot', type: 'circle', source: 'foot', paint: { 'circle-radius': 2, 'circle-color': css('--crit'), 'circle-opacity': 0.35 } });
   map.addLayer({ id: 'routeSeg', type: 'line', source: 'routeSeg', layout: { 'line-cap': 'round' },
     paint: { 'line-width': 5, 'line-color': ['match', ['get', 'c'], 1, css('--good'), 2, css('--c2'), 3, css('--warn'), 4, css('--c4'), 5, css('--crit'), css('--accent')] } });
+  map.addLayer({ id: 'routeBlocked', type: 'line', source: 'routeSeg', filter: ['==', ['get', 'b'], true], layout: { 'line-cap': 'round' },
+    paint: { 'line-width': 11, 'line-color': css('--crit'), 'line-opacity': 0.55 } }, 'routeSeg');
   map.addLayer({ id: 'wps', type: 'circle', source: 'wps', paint: { 'circle-radius': 6, 'circle-color': css('--accent'), 'circle-stroke-color': css('--panel'), 'circle-stroke-width': 2 } });
 
   for (const id of ['obstacles', 'sites', 'power']) {
@@ -105,25 +107,64 @@ function popup(e) {
 map.on('click', e => {
   // While a route is being drawn every click is a waypoint; otherwise a click on a feature inspects it.
   const drawing = state.route.length && !state.finished;
+  const wp = state.finished && map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers: ['wps'] });
+  if (wp && wp.length) return levelPicker(wp[0].properties.i);
   const hit = !drawing && map.queryRenderedFeatures(e.point, { layers: ['obstacles', 'sites', 'power'].filter(id => map.getLayoutProperty(id, 'visibility') !== 'none') });
   if (hit && hit.length) return popup({ features: hit, lngLat: e.lngLat });
-  if (state.finished) { state.route = []; state.finished = false; }
+  if (state.finished) { undoStack.length = 0; state.route = []; state.finished = false; }
   state.route.push([e.lngLat.lng, e.lngLat.lat]); score();
 });
 map.on('dblclick', e => { e.preventDefault(); if (state.route.length > 1) { state.finished = true; score(); } });
-$('undo').onclick = () => { state.route.pop(); state.finished = false; score(); };
-$('clear').onclick = () => { state.route = []; state.finished = false; score(); };
+// Undo reverses the last planner or level change; otherwise it removes the last waypoint.
+const undoStack = [];
+const remember = () => undoStack.push(state.route.map(p => p.slice()));
+$('undo').onclick = () => {
+  if (undoStack.length) { state.route = undoStack.pop(); state.finished = true; return score(); }
+  state.route.pop(); state.finished = false; score();
+};
+$('clear').onclick = () => { undoStack.length = 0; state.route = []; state.finished = false; score(); };
+
+// ---------- Levels and planners ----------
+const LEVELS = [150, 200, 250, 300, 350, 400];
+function levelPicker(i) {
+  const cur = state.route[i][2], def = +$('alt').value, name = i === 0 ? 'Launch' : i === state.route.length - 1 ? 'Drop' : `Waypoint ${i}`;
+  const el = document.createElement('div');
+  el.className = 'levels-pick';
+  el.innerHTML = `<b>${name} altitude</b><div>${LEVELS.map(l => `<button data-l="${l}" class="${(cur ?? def) === l ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <button data-l="" class="link">${cur == null ? 'Using' : 'Use'} route default (${def} ft)</button>`;
+  const pop = new maplibregl.Popup({ closeButton: true, maxWidth: '260px' }).setLngLat(state.route[i].slice(0, 2)).setDOMContent(el).addTo(map);
+  el.onclick = ev => {
+    const l = ev.target.dataset?.l; if (l === undefined) return;
+    remember();
+    state.route[i] = l === '' ? state.route[i].slice(0, 2) : [state.route[i][0], state.route[i][1], +l];
+    pop.remove(); score();
+  };
+}
+$('climb').onclick = () => {
+  if (!state.finished) return toast('Finish a route first (double-click)');
+  const { route, stuck } = planClimb(D, state.route, { altFt: +$('alt').value });
+  remember(); state.route = route; score();
+  toast(stuck.length ? `Raised what it could. ${stuck.length} leg${stuck.length > 1 ? 's' : ''} would need ${Math.max(...stuck.map(x => x.needFt))} ft but the limit there is ${Math.min(...stuck.map(x => x.capFt))} ft: try Go around.` : 'Levels raised to clear every building and obstacle by 50 ft.', 4500);
+};
+$('around').onclick = () => {
+  if (!state.finished) return toast('Finish a route first (double-click)');
+  const t = performance.now();
+  const { route, failed, moved } = planAround(D, state.route, { altFt: +$('alt').value });
+  remember(); state.route = route; score();
+  const km = (state.result.lenM / 1000).toFixed(2);
+  toast(failed.length ? `No clear path found for ${failed.length} leg${failed.length > 1 ? 's' : ''}; try a higher level.` : `Rerouted around buildings and obstacles: ${km} km, ${route.length - 2} turn${route.length === 3 ? '' : 's'}${moved.length ? `, ${moved.length} waypoint moved off a tower` : ''} (${Math.round(performance.now() - t)} ms).`, 4500);
+};
 $('route').onchange = e => e.target.value && loadSample(e.target.value);
 // The URL hash carries the route and settings, so a link reproduces the exact analysis.
 function saveHash() {
   if (!state.finished || state.route.length < 2) return;
-  const q = new URLSearchParams({ r: state.route.map(p => p.map(x => x.toFixed(5)).join(',')).join(';'), ac: $('aircraft').value, alt: $('alt').value, w: $('wind').value, t: $('tod').value });
+  const q = new URLSearchParams({ r: state.route.map(p => [p[0].toFixed(5), p[1].toFixed(5), ...(p.length > 2 ? [p[2]] : [])].join(',')).join(';'), ac: $('aircraft').value, alt: $('alt').value, w: $('wind').value, t: $('tod').value });
   history.replaceState(null, '', '#' + q.toString());
 }
 function loadHash() {
   const q = new URLSearchParams(location.hash.slice(1)), r = q.get('r');
   if (!r) return false;
-  const pts = r.split(';').map(p => p.split(',').map(Number)).filter(p => p.length === 2 && p.every(Number.isFinite));
+  const pts = r.split(';').map(p => p.split(',').map(Number)).filter(p => (p.length === 2 || p.length === 3) && p.every(Number.isFinite));
   if (pts.length < 2) return false;
   for (const [k, id] of [['ac', 'aircraft'], ['alt', 'alt'], ['w', 'wind'], ['t', 'tod']]) if (q.get(k) && $(id).querySelector(`option[value="${q.get(k)}"]`)) $(id).value = q.get(k);
   state.route = pts; state.finished = true;
@@ -144,7 +185,7 @@ function fitRoute(pts) {
 }
 function loadSample(id) {
   const R = ROUTES.find(r => r.id === id);
-  state.route = R.path.map(p => p.slice()); state.finished = true;
+  undoStack.length = 0; state.route = R.path.map(p => p.slice()); state.finished = true;
   $('aircraft').value = R.aircraft; $('alt').value = R.altFt; $('route').value = id;
   fitRoute(state.route);
   score();
@@ -169,7 +210,7 @@ document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('cha
 // ---------- 3D sky / plan view ----------
 // 3D draws the route, lane, footprints and airspace volumes with deck.gl; plan view uses the flat MapLibre layers and the layer toggles.
 let scene = null, view = '3d';
-const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg'];
+const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg', 'routeBlocked'];
 function setView(v) {
   view = v;
   document.body.dataset.view = v;
@@ -189,7 +230,7 @@ function score() {
   if (tod !== lastTod && map.getSource('density')) { map.getSource('density').updateImage({ url: densityImage(tod), coordinates: gridCorners() }); lastTod = tod; }
   state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod }) : null;
   drawMap(); renderRail(); renderDoc(); saveHash();
-  $('hint').textContent = state.route.length ? state.finished ? 'Route complete. Click the map to start a new one.' : 'Keep clicking. Double-click to finish.' : 'Click to place waypoints. Double-click to finish.';
+  $('hint').textContent = state.route.length ? state.finished ? 'Route complete. Click a waypoint to set its altitude, or the map to start a new route.' : 'Keep clicking. Double-click to finish.' : 'Click to place waypoints. Double-click to finish.';
 }
 
 function drawMap() {
@@ -199,7 +240,7 @@ function drawMap() {
   scene?.update(r, state.route);
   if (!r) { for (const id of ['area', 'noise', 'foot', 'routeSeg']) map.getSource(id).setData(fc([])); return; }
   const segs = [];
-  for (let i = 0; i < r.samples.length - 1; i++) segs.push({ type: 'Feature', properties: { c: r.samples[i].c }, geometry: { type: 'LineString', coordinates: [r.samples[i].ll, r.samples[i + 1].ll] } });
+  for (let i = 0; i < r.samples.length - 1; i++) segs.push({ type: 'Feature', properties: { c: r.samples[i].c, b: r.samples[i].blocked }, geometry: { type: 'LineString', coordinates: [r.samples[i].ll, r.samples[i + 1].ll] } });
   map.getSource('routeSeg').setData(fc(segs));
   map.getSource('foot').setData(fc(r.foot.map(p => pt(D.unproj(p)))));
   map.getSource('noise').setData(fc([{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: state.route } }]));
@@ -215,12 +256,12 @@ function renderRail() {
   if (!r) { $('verdict').innerHTML = '<span class="pill warn">—</span><span>Draw a route</span>'; ['routeKv', 'riskKv', 'airKv', 'noiseKv', 'segbar', 'findings'].forEach(i => ($(i).innerHTML = '')); return; }
   const f = findings(r), v = verdict(f);
   $('verdict').innerHTML = `<span class="pill ${v}">Cat ${r.maxCat}</span><span>${v === 'crit' ? 'Not fileable as drawn' : v === 'warn' ? 'Fileable with mitigations' : 'Fileable'}</span>`;
-  kv('routeKv', [['Corridor', corridorId(r)], ['Length', (r.lenM / 1000).toFixed(2) + ' km'], ['Flight time', r.minutes.toFixed(1) + ' min at ' + r.ac.spd + ' m/s'], ['Altitude', r.altFt + ' ft AGL'], ['Wind', `${r.wind.kt} kt from ${r.wind.dir}°`]]);
+  kv('routeKv', [['Corridor', corridorId(r)], ['Length', (r.lenM / 1000).toFixed(2) + ' km'], ['Flight time', r.minutes.toFixed(1) + ' min at ' + r.ac.spd + ' m/s'], ['Altitude', altLabel(r)], ['Wind', `${r.wind.kt} kt from ${r.wind.dir}°`]]);
   const step = Math.max(1, Math.ceil(r.samples.length / 60));
   $('segbar').innerHTML = r.samples.filter((_, i) => i % step === 0).map(s => `<i class="c${s.c}" title="Cat ${s.c} · ${n0(s.d)} /km²"></i>`).join('');
   kv('riskKv', [['Peak density', n0(r.peakD) + ' /km²'], ['Mean density', n0(r.meanD) + ' /km²'], ['Under footprint (mean)', n0(r.meanUnder) + ' /km²'], ['Landings on dense ground', Math.round(r.hiFrac * 100) + '%'], ['Landings in water', Math.round(r.waterFrac * 100) + '%'], ['Fatalities / flight hr', r.ecPerFh.toExponential(1)], ['Footprint samples', r.foot.length.toLocaleString()]]);
-  kv('airKv', [['In LAANC grids', Math.round(r.laancShare * 100) + '%'], ['Lowest ceiling', r.minCeiling == null ? '—' : r.minCeiling + ' ft'], ['Obstacles ≥ alt − 50 ft', r.obstacles.length], ['Transmission lines', r.powerlines.length], ['Airspace features', r.airspace.filter(a => !a.conditional).length]]);
-  kv('noiseKv', [['Source level', r.ac.src + ' dB @ 1 m'], ['Directly below', Math.round(noiseAt(0, r.altFt, r.ac)) + ' dB'], ['55 dB half-width', n0(r.halfWidth55) + ' m'], ['Hospitals ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'hospital').length], ['Schools ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'school').length]]);
+  kv('airKv', [['In LAANC grids', Math.round(r.laancShare * 100) + '%'], ['Lowest ceiling', r.minCeiling == null ? '—' : r.minCeiling + ' ft'], ['Route blocked', Math.round(r.blockedShare * 100) + '%'], ['Buildings within 60 m', r.buildings.length], ['Other obstacles within 60 m', r.obstacles.length], ['Transmission lines', r.powerlines.length], ['Airspace features', r.airspace.filter(a => !a.conditional).length]]);
+  kv('noiseKv', [['Source level', r.ac.src + ' dB @ 1 m'], ['Directly below', Math.round(noiseAt(0, r.altMin, r.ac)) + ' dB'], ['55 dB half-width', n0(r.halfWidth55) + ' m'], ['Hospitals ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'hospital').length], ['Schools ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'school').length]]);
   $('findings').innerHTML = f.map(([c, t]) => `<li class="${c}">${t}</li>`).join('');
 }
 
@@ -239,9 +280,9 @@ $('dlGeo').onclick = () => {
   const r = state.result; if (!r) return toast('Draw a route first');
   const a = intendedArea(D, r);
   save(`${corridorId(r)}.geojson`, JSON.stringify(fc([
-    { type: 'Feature', properties: { role: 'route', corridor: corridorId(r), alt_ft_agl: r.altFt, aircraft: r.ac.name }, geometry: { type: 'LineString', coordinates: state.route } },
+    { type: 'Feature', properties: { role: 'route', corridor: corridorId(r), alt_ft_agl: r.alts, aircraft: r.ac.name }, geometry: { type: 'LineString', coordinates: state.route.map((p, i) => [p[0], p[1], +(r.alts[i] / FT).toFixed(1)]) } },
     { type: 'Feature', properties: { role: 'area_of_intended_flight', km2: +a.km2.toFixed(3) }, geometry: { type: 'Polygon', coordinates: [a.ring] } },
   ]), null, 1), 'application/geo+json');
 };
 $('print').onclick = () => print();
-function toast(t) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), 2000); }
+function toast(t, ms = 2000) { const d = document.createElement('div'); d.className = 'toast'; d.textContent = t; document.body.appendChild(d); setTimeout(() => d.remove(), ms); }

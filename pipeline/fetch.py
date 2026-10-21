@@ -100,6 +100,14 @@ def main():
                          'way["building"]["building:levels"](if:number(t["building:levels"])>=8);out center tags;'
                          'nwr["man_made"~"^(mast|tower|chimney|crane)$"];out center tags;'
                          'way["power"="line"];out geom tags;')
+    # Footprints of every building tall enough to matter at 150-400 ft: tagged height >= 20 m or >= 6 levels.
+    overpass("osm_buildings", 'way["building"]["height"](if:number(t["height"])>=20);out geom tags;'
+                              'way["building"]["building:levels"](if:number(t["building:levels"])>=6);out geom tags;'
+                              'relation["building"]["height"](if:number(t["height"])>=20);out geom tags;'
+                              # towers mapped as parts (Columbia Center, many downtown high-rises)
+                              'way["building:part"]["height"](if:number(t["height"])>=20);out geom tags;'
+                              'way["building:part"]["building:levels"](if:number(t["building:levels"])>=6);out geom tags;'
+                              'relation["building:part"]["height"](if:number(t["height"])>=20);out geom tags;')
 
 
 if __name__ == "__main__":

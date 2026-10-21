@@ -2,7 +2,7 @@
 // Heights are metres above ground (the basemap is flat), so 400 ft AGL sits at z = 122 m.
 import { FT } from './engine.js';
 
-const { MapboxOverlay, SolidPolygonLayer, PolygonLayer, PathLayer, ColumnLayer, ScatterplotLayer, LineLayer, TripsLayer,
+const { MapboxOverlay, SolidPolygonLayer, PolygonLayer, PathLayer, ColumnLayer, ScatterplotLayer, LineLayer, TripsLayer, TextLayer,
   LightingEffect, AmbientLight, DirectionalLight } = deck;
 
 const CAT = { 1: [95, 194, 122], 2: [152, 208, 127], 3: [224, 162, 74], 4: [232, 135, 82], 5: [226, 101, 90] };
@@ -16,22 +16,24 @@ const lighting = new LightingEffect({
   sun: new DirectionalLight({ color: [255, 244, 230], intensity: 1.6, direction: [-2, -3, -6] }),
 });
 
-/** Rectangles around each route segment, width w metres, as [lon, lat, z] rings. */
+/** Rectangles around each route segment, width w metres, as [lon, lat, z] rings. z is one height or one per waypoint. */
 function ribbon(D, pts, w, z) {
+  const zs = Array.isArray(z) ? z : pts.map(() => z);
   const out = [];
   for (let i = 0; i < pts.length - 1; i++) {
     const a = D.proj(pts[i]), b = D.proj(pts[i + 1]), L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
     const nx = -(b[1] - a[1]) / L * w / 2, ny = (b[0] - a[0]) / L * w / 2;
-    out.push([[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]].map(p => [...D.unproj(p), z]));
+    out.push([[[a[0] + nx, a[1] + ny], zs[i]], [[b[0] + nx, b[1] + ny], zs[i + 1]], [[b[0] - nx, b[1] - ny], zs[i + 1]], [[a[0] - nx, a[1] - ny], zs[i]]].map(([p, h]) => [...D.unproj(p), h]));
   }
   return out;
 }
 
 /** The route offset sideways by `side` metres at height z: the edges of the lane slab. */
 function offset(D, pts, side, z) {
+  const zs = Array.isArray(z) ? z : pts.map(() => z);
   return pts.map((p, i) => {
     const a = D.proj(pts[Math.max(0, i - 1)]), b = D.proj(pts[Math.min(pts.length - 1, i + 1)]), L = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1, q = D.proj(p);
-    return [...D.unproj([q[0] - (b[1] - a[1]) / L * side, q[1] + (b[0] - a[0]) / L * side]), z];
+    return [...D.unproj([q[0] - (b[1] - a[1]) / L * side, q[1] + (b[0] - a[0]) / L * side]), zs[i]];
   });
 }
 
@@ -69,21 +71,29 @@ export function createScene(map, D, raw) {
     if (!r) return L;
 
     const pts = route, last = r.samples.length - 1;
-    const air = r.samples.map(s => [...s.ll, alt]);
+    const air = r.samples.map(s => [...s.ll, s.alt / FT]);
     // Ground: noise band and the area of intended flight.
     L.push(new SolidPolygonLayer({ id: 'noise3d', data: ribbon(D, pts, Math.max(8, 2 * r.halfWidth55), 0.5), getPolygon: d => d, getFillColor: [...TEAL, 28], parameters: GLASS }));
     // The lane: a translucent slab ±15 m around cruise altitude, as in the stacked-lane model.
-    L.push(new SolidPolygonLayer({ id: 'lane', data: ribbon(D, pts, 60, alt - 15), getPolygon: d => d, extruded: true, getElevation: 30,
+    const wz = r.alts.map(a => a / FT);
+    L.push(new SolidPolygonLayer({ id: 'lane', data: ribbon(D, pts, 60, wz.map(z => z - 15)), getPolygon: d => d, extruded: true, getElevation: 30,
       getFillColor: [...TEAL, 30], material: { ambient: 0.9, diffuse: 0.2 }, parameters: GLASS }));
-    L.push(new PathLayer({ id: 'lane-edges', data: [-1, 1].flatMap(sd => [alt - 15, alt + 15].map(z => offset(D, pts, sd * 30, z))), getPath: d => d, getColor: [...TEAL, 110], getWidth: 1, widthMinPixels: 1 }));
+    L.push(new PathLayer({ id: 'lane-edges', data: [-1, 1].flatMap(sd => [-15, 15].map(dz => offset(D, pts, sd * 30, wz.map(z => z + dz)))), getPath: d => d, getColor: [...TEAL, 110], getWidth: 1, widthMinPixels: 1 }));
+    // Buildings the route reaches, outlined in red over the basemap's own extrusion.
+    const struck = r.buildings.filter(b => b.dm < r.opt.clearM); // inside the 30 m clearance and within 50 ft of the route's level
+    L.push(new PolygonLayer({ id: 'struck', data: struck, getPolygon: b => b.ring, extruded: true, wireframe: true, getElevation: b => b.h_ft / FT + 1,
+      getFillColor: [...RED, 120], getLineColor: [...RED, 255], parameters: GLASS, pickable: true }));
+    // Waypoint levels, written in the air.
+    L.push(new TextLayer({ id: 'levels', data: pts.map((p, i) => ({ p: [p[0], p[1], wz[i] + 22], t: `${r.alts[i]} ft`, show: i === 0 || i === pts.length - 1 || r.alts[i] !== r.alts[i - 1] })).filter(d => d.show), getPosition: d => d.p, getText: d => d.t,
+      getSize: 12, getColor: [...WHITE, 240], background: true, getBackgroundColor: [18, 25, 32, 210], backgroundPadding: [4, 2], fontFamily: 'IBM Plex Mono, monospace', billboard: true }));
     // Failure fall lines from the route to each simulated landing, and the landings glowing on the ground.
-    const fall = r.foot.map((p, i) => ({ s: [...D.unproj(r.footFrom[i]), alt], t: [...D.unproj(p), 0.5] }));
+    const fall = r.foot.map((p, i) => ({ s: [...D.unproj(r.footFrom[i][0]), r.footFrom[i][1] / FT], t: [...D.unproj(p), 0.5] }));
     L.push(new LineLayer({ id: 'fall', data: fall.filter((_, i) => i % 3 === 0), getSourcePosition: d => d.s, getTargetPosition: d => d.t, getColor: [...RED, 55], getWidth: 1, parameters: GLASS }));
     L.push(new ScatterplotLayer({ id: 'landings', data: fall, getPosition: d => d.t, getRadius: 6, radiusMinPixels: 1.5, getFillColor: [...RED, 150] }));
     // Route: climb at launch, cruise coloured by FAA category, descend at the drop.
     const segs = [];
     for (let i = 0; i < last; i++) segs.push({ path: [air[i], air[i + 1]], c: r.samples[i].c });
-    const legs = [[[...r.samples[0].ll, 0], air[0]], [air[last], [...r.samples[last].ll, 0]]];
+    const legs = [[[...r.samples[0].ll, 0], air[0]], [air[last], [...r.samples[last].ll, 0]], ...pts.slice(1, -1).map((p, i) => [[p[0], p[1], 0], [p[0], p[1], wz[i + 1]]])];
     L.push(new PathLayer({ id: 'route-glow', data: segs, getPath: d => d.path, getColor: d => [...CAT[d.c], 90], getWidth: 24, widthMinPixels: 8, capRounded: true, parameters: GLASS }));
     L.push(new PathLayer({ id: 'route', data: segs, getPath: d => d.path, getColor: d => [...CAT[d.c], 255], getWidth: 4, widthMinPixels: 2.5, capRounded: true }));
     L.push(new PathLayer({ id: 'legs', data: legs, getPath: d => d, getColor: [...WHITE, 200], getWidth: 2, widthMinPixels: 1.5, getDashArray: [4, 3] }));

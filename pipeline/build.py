@@ -152,6 +152,8 @@ def build_obstacles():
             lines.append({"type": "Feature", "properties": {"voltage": t.get("voltage"), "name": t.get("name")},
                           "geometry": {"type": "LineString", "coordinates": [r5([p["lon"], p["lat"]]) for p in e["geometry"]]}})
             continue
+        if "building" in t and not t.get("man_made"):
+            continue  # buildings are footprints now, see build_buildings
         lon, lat = osm_center(e)
         if lon is None:
             continue
@@ -172,6 +174,48 @@ def build_obstacles():
     (OUT / "powerlines.json").write_text(json.dumps({"type": "FeatureCollection", "features": lines}))
     note("obstacles", "FAA Digital Obstacle File (daily) + OpenStreetMap", len(obs), faa_dof=n_dof, osm=len(obs) - n_dof)
     note("powerlines", "OpenStreetMap power=line (transmission; distribution lines largely unmapped)", len(lines))
+
+
+def building_height_m(t):
+    h = num(t.get("height"))
+    if h is None and t.get("building:levels"):
+        lv = num(t["building:levels"])
+        h = lv * 3.3 + 3 if lv else None
+    return h
+
+
+def build_buildings():
+    """Footprints of tall buildings, so a route is tested against the outline, not a centre point."""
+    from shapely.ops import polygonize, unary_union
+    out, seen = [], set()
+    for e in json.load(open(RAW / "osm_buildings.json"))["elements"]:
+        t = e.get("tags", {})
+        h = building_height_m(t)
+        if h is None:
+            continue
+        if e["type"] == "way" and "geometry" in e:
+            ring = [(p["lon"], p["lat"]) for p in e["geometry"]]
+            if len(ring) < 4:
+                continue
+            polys = [shape({"type": "Polygon", "coordinates": [ring]})]
+        elif e["type"] == "relation":
+            lines = [[(p["lon"], p["lat"]) for p in m["geometry"]] for m in e.get("members", []) if m.get("role") == "outer" and "geometry" in m]
+            polys = list(polygonize(unary_union([shape({"type": "LineString", "coordinates": l}) for l in lines if len(l) > 1])))
+        else:
+            continue
+        for poly in polys:
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly.is_empty or not poly.intersects(BBOX) or poly.geom_type != "Polygon":
+                continue
+            key = (round(poly.centroid.x, 5), round(poly.centroid.y, 5), round(h))
+            if key in seen:
+                continue  # the same tower mapped as a building and as a relation
+            seen.add(key)
+            out.append({"id": f"osm/{e['type']}/{e['id']}", "name": t.get("name"), "h_ft": round(h * FT),
+                        "ring": [r5(c) for c in poly.simplify(0.00001).exterior.coords]})
+    (OUT / "buildings.json").write_text(json.dumps(out))
+    note("buildings", "OpenStreetMap building and building:part footprints, height >= 20 m or >= 6 levels", len(out))
 
 
 # ---------------------------------------------------------------- sensitive sites
@@ -241,6 +285,7 @@ def build_airspace():
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     build_obstacles()
+    build_buildings()
     build_sites()
     build_airspace()
     build_grid()  # after build_airspace: rasterizes its polygons

@@ -10,13 +10,17 @@
  "layers": {
   "obstacles": {
    "source": "FAA Digital Obstacle File (daily) + OpenStreetMap",
-   "count": 1331,
+   "count": 969,
    "faa_dof": 618,
-   "osm": 713
+   "osm": 351
   },
   "powerlines": {
    "source": "OpenStreetMap power=line (transmission; distribution lines largely unmapped)",
    "count": 142
+  },
+  "buildings": {
+   "source": "OpenStreetMap building and building:part footprints, height >= 20 m or >= 6 levels",
+   "count": 1593
   },
   "sites": {
    "source": "OpenStreetMap amenities + FAA ADDS airports/heliports/stadiums",

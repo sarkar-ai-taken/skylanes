@@ -4,6 +4,11 @@ Draw a delivery-drone route over Seattle and get a draft safety-case package: FA
 Monte Carlo failure footprints, expected ground fatalities per flight hour, obstacles, power lines, LAANC ceilings,
 heliports and stadium TFRs, noise, and an area of intended flight. All on real public data.
 
+Routes are tested against real building footprints (OSM, incl. tower parts) and FAA obstacles with one rule: keep
+30 m sideways from anything that rises to within 50 ft of the route's level. Each waypoint can carry its own altitude
+(click it on the map), and two planners fix conflicts: **Climb over** raises only the legs that need it, within 400 ft
+and the LAANC ceiling; **Go around** finds a path around buildings at the current level (A* on a 15 m grid).
+
 **Live:** https://sarkar-ai-taken.github.io/skylanes/ · no sign-up, no API keys, runs entirely in the browser.
 Every analysis is a shareable link (the route and settings live in the URL).
 
@@ -42,7 +47,8 @@ run `npm run build-data`, commit `app/data/`, and update the initial map bounds 
 | Residents | US Census 2020 TIGER/Line blocks, POP20 |
 | Daytime population | LEHD LODES8 workplace area characteristics 2021 (jobs per block) |
 | Density category | FAA ADDS "Operating Categories Map" service |
-| Obstacles | FAA Digital Obstacle File (daily) + OSM tall buildings, masts, towers, cranes |
+| Obstacles | FAA Digital Obstacle File (daily) + OSM masts, towers, cranes |
+| Buildings | OSM building and building:part footprints ≥ 20 m or ≥ 6 levels (same source as the 3D basemap) |
 | Power lines | OSM `power=line` (transmission only) |
 | Controlled airspace | FAA UAS Facility Map grids, FAA Class airspace surface areas |
 | Heliports, airports, stadiums | FAA ADDS + OSM |

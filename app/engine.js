@@ -42,7 +42,7 @@ function decode(b64, Type) {
   return Type === Uint8Array ? bytes : new Type(bytes.buffer);
 }
 
-export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest }) {
+export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest, buildings = [] }) {
   const [W, S, E, N] = manifest.bbox;
   const lat0 = (S + N) / 2, lon0 = (W + E) / 2;
   const mLon = 111320 * Math.cos(lat0 * Math.PI / 180), mLat = 110574;
@@ -54,12 +54,47 @@ export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest
   return {
     manifest, proj, unproj, grid: g,
     obstacles: obstacles.map(o => ({ ...o, xy: proj([o.lon, o.lat]) })),
+    buildings: buildings.map(b => { const ring = b.ring.map(proj); return { ...b, xy: ring, bbox: bboxOf([[ring]]) }; }),
     powerlines: powerlines.features.map(f => ({ props: f.properties, xy: f.geometry.coordinates.map(proj) })),
     sites: sites.map(s => ({ ...s, xy: proj([s.lon, s.lat]) })),
     facility: polys(airspace.facility_map),
     surface: polys(airspace.surface_areas),
     opcats: polys(airspace.operating_categories),
   };
+}
+
+/** Bucket items by 200 m cells so point queries only look at nearby buildings and obstacles. */
+const HASH_M = 200;
+function hashOf(items, boxOf) {
+  const h = new Map();
+  for (const it of items) {
+    const [a, b, c, d] = boxOf(it);
+    for (let i = Math.floor(a / HASH_M); i <= Math.floor(c / HASH_M); i++) for (let j = Math.floor(b / HASH_M); j <= Math.floor(d / HASH_M); j++) {
+      const k = i + ',' + j; if (!h.has(k)) h.set(k, []); h.get(k).push(it);
+    }
+  }
+  return h;
+}
+function nearby(h, xy, r) {
+  const out = new Set();
+  for (let i = Math.floor((xy[0] - r) / HASH_M); i <= Math.floor((xy[0] + r) / HASH_M); i++) for (let j = Math.floor((xy[1] - r) / HASH_M); j <= Math.floor((xy[1] + r) / HASH_M); j++)
+    for (const it of h.get(i + ',' + j) || []) out.add(it);
+  return out;
+}
+function index(D) {
+  if (!D._bh) {
+    D._bh = hashOf(D.buildings, b => b.bbox);
+    D._oh = hashOf(D.obstacles, o => [o.xy[0], o.xy[1], o.xy[0], o.xy[1]]);
+  }
+  return D;
+}
+/** Metres from xy to a building footprint; 0 inside. */
+export function distToBuilding(xy, b) {
+  const r = b.xy;
+  if (inRing(xy[0], xy[1], r)) return 0;
+  let m = Infinity;
+  for (let i = 0; i < r.length - 1; i++) m = Math.min(m, segDist(xy, r[i], r[i + 1]));
+  return m;
 }
 
 function bboxOf(polys) {
@@ -146,27 +181,54 @@ export const noiseAt = (horizM, altFt, ac) => { const r = Math.hypot(horizM, alt
 export const noiseHalfWidth = (altFt, ac, db = 55) => Math.sqrt(Math.max(0, (10 ** ((ac.src - db) / 20)) ** 2 - (altFt / FT) ** 2));
 
 // ---------- Route scoring ----------
-export const DEFAULTS = { failRatePerFh: 1e-4, sampleM: 25, footEveryM: 100, footN: 40, obstacleLateralM: 60, obstacleVertFt: 50, powerlineM: 30, powerlineMaxFt: 250, heliportM: 800, denseKm2: 5000 };
+export const DEFAULTS = { failRatePerFh: 1e-4, sampleM: 25, footEveryM: 100, footN: 40, obstacleLateralM: 60, clearM: 30, obstacleVertFt: 50, buildingHitM: 10, powerlineM: 30, powerlineMaxFt: 250, heliportM: 800, denseKm2: 5000 };
+
+/** Altitude (ft AGL) of each waypoint: its own third coordinate, else the route default. */
+export const waypointAlts = (route, altFt) => route.map(p => (p.length > 2 && Number.isFinite(p[2]) ? p[2] : altFt));
+
+/**
+ * Tallest building or obstacle (ft) within `r` metres of xy. The clearance rule used everywhere: a drone must keep
+ * clearM (30 m) sideways from anything that rises to within obstacleVertFt (50 ft) of its altitude.
+ */
+function tallestNear(D, xy, r) {
+  index(D);
+  let h = 0;
+  for (const b of nearby(D._bh, xy, r)) if (b.h_ft > h && distToBuilding(xy, b) < r) h = b.h_ft;
+  for (const ob of nearby(D._oh, xy, r)) if (ob.agl_ft > h && hyp(xy, ob.xy) < r) h = ob.agl_ft;
+  return h;
+}
+const isBlocked = (D, xy, alt, o, r = o.clearM) => tallestNear(D, xy, r) > alt - o.obstacleVertFt;
 
 export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', ...opt } = {}) {
   const o = { ...DEFAULTS, ...opt }, ac = typeof aircraft === 'string' ? AIRCRAFT[aircraft] : aircraft;
-  const pts = route.map(D.proj), rnd = rng(99);
-  const samples = [], foot = [], footFrom = [], obst = new Map(), lines = new Map(), air = new Map(), noise = { hospital: 0, school: 0 };
+  index(D);
+  const pts = route.map(p => D.proj(p)), alts = waypointAlts(route, altFt), rnd = rng(99);
+  const samples = [], foot = [], footFrom = [], obst = new Map(), bld = new Map(), lines = new Map(), air = new Map(), noise = { hospital: 0, school: 0 };
   let lenM = 0, nextFoot = 0, overSum = 0, hi = 0, waterLandings = 0;
   const near = new Map();
+  const sampleAt = (xy, along, alt) => {
+    const d = density(D, xy, tod), fc = faaCategory(D, xy);
+    return { xy, ll: D.unproj(xy), along, alt, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: isWater(D, xy),
+      blocked: isBlocked(D, xy, alt, o) };
+  };
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1], L = hyp(a, b), steps = Math.max(1, Math.ceil(L / o.sampleM));
     for (let s = 0; s < steps; s++) {
       const t = s / steps, xy = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], along = lenM + L * t;
-      const d = density(D, xy, tod), fc = faaCategory(D, xy), c = fc ?? catFromDensity(d);
-      const ceiling = facilityCeiling(D, xy);
-      samples.push({ xy, ll: D.unproj(xy), along, d, c, faa: fc != null, ceiling, water: isWater(D, xy) });
-      for (const ob of D.obstacles) if (hyp(xy, ob.xy) < o.obstacleLateralM && ob.agl_ft > altFt - o.obstacleVertFt) obst.set(ob.id, ob);
-      for (const pl of D.powerlines) if (altFt < o.powerlineMaxFt) for (let k = 0; k < pl.xy.length - 1; k++)
+      const alt = alts[i] + (alts[i + 1] - alts[i]) * t;
+      samples.push(sampleAt(xy, along, alt));
+      for (const ob of nearby(D._oh, xy, o.obstacleLateralM)) { const dm = hyp(xy, ob.xy); if (dm < o.obstacleLateralM && ob.agl_ft > alt - o.obstacleVertFt) {
+        const prev = obst.get(ob.id); obst.set(ob.id, { ...ob, alt: Math.min(alt, prev?.alt ?? Infinity), dm: Math.min(dm, prev?.dm ?? Infinity) });
+      } }
+      for (const bd of nearby(D._bh, xy, o.obstacleLateralM)) if (bd.h_ft > alt - o.obstacleVertFt) {
+        const dm = distToBuilding(xy, bd);
+        if (dm < o.obstacleLateralM) { const prev = bld.get(bd.id); bld.set(bd.id, { ...bd, alt: Math.min(alt, prev?.alt ?? Infinity), dm: Math.min(dm, prev?.dm ?? Infinity) }); }
+      }
+      for (const pl of D.powerlines) if (alt < o.powerlineMaxFt) for (let k = 0; k < pl.xy.length - 1; k++)
         if (segDist(xy, pl.xy[k], pl.xy[k + 1]) < o.powerlineM) { lines.set(pl, along); break; }
       for (const st of D.sites) {
         const dm = hyp(xy, st.xy);
-        if (st.kind === 'hospital' || st.kind === 'school') { const db = noiseAt(dm, altFt, ac); if (db > 55) noise[st.kind] = Math.max(noise[st.kind], db); if (db > 55) near.set(st, Math.max(near.get(st) || 0, db)); }
+        if (st.kind === 'hospital' || st.kind === 'school') { const db = noiseAt(dm, alt, ac); if (db > 55) { noise[st.kind] = Math.max(noise[st.kind], db); near.set(st, Math.max(near.get(st) || 0, db)); } }
         if (st.kind === 'heliport' && dm < o.heliportM) air.set(`Heliport ${st.name}`, { kind: 'heliport', site: st, dm: Math.min(dm, air.get(`Heliport ${st.name}`)?.dm ?? Infinity) });
         if (st.kind === 'airport' && dm < 3000) air.set(`Airport ${st.name}`, { kind: 'airport', site: st, dm });
         if (st.kind === 'stadium' && st.tfr && dm < STADIUM_TFR_M) air.set(`Stadium TFR ${st.name}`, { kind: 'stadium', site: st, dm, conditional: tod !== 'event' });
@@ -174,8 +236,8 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
       for (const P of D.surface) if (inPolys(xy[0], xy[1], P)) air.set(`${P.props.name}`, { kind: 'surface', cls: P.props.class });
       if (along >= nextFoot) {
         nextFoot += o.footEveryM;
-        for (const p of footprint(xy, altFt, ac, wind, o.footN, rnd)) {
-          const pd = density(D, p, tod); foot.push(p); footFrom.push(xy); overSum += pd;
+        for (const p of footprint(xy, alt, ac, wind, o.footN, rnd)) {
+          const pd = density(D, p, tod); foot.push(p); footFrom.push([xy, alt]); overSum += pd;
           if (pd >= o.denseKm2) hi++;
           if (isWater(D, p)) waterLandings++;
         }
@@ -183,7 +245,7 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
     }
     lenM += L;
   }
-  if (pts.length > 1) { const xy = pts[pts.length - 1]; const d = density(D, xy, tod), fc = faaCategory(D, xy); samples.push({ xy, ll: D.unproj(xy), along: lenM, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: isWater(D, xy) }); }
+  if (pts.length > 1) samples.push(sampleAt(pts[pts.length - 1], lenM, alts[alts.length - 1]));
   if (samples.length < 2) return null;
 
   const maxCat = Math.max(...samples.map(s => s.c));
@@ -192,20 +254,130 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   // Expected ground fatalities per flight hour: failure rate × lethal area × people per m² under the footprint.
   const ecPerFh = o.failRatePerFh * ac.lethalAreaM2 * meanUnder / 1e6;
   const laanc = samples.filter(s => s.ceiling != null);
-  const overCeiling = laanc.filter(s => altFt > s.ceiling);
+  const overCeiling = laanc.filter(s => s.alt > s.ceiling);
+  const altMin = Math.min(...alts), altMax = Math.max(...alts);
   return {
-    ac, altFt, wind, tod, opt: o, samples, foot, footFrom, lenM, minutes: hours * 60, maxCat,
+    ac, altFt, alts, altMin, altMax, levelled: altMin !== altMax, wind, tod, opt: o, samples, foot, footFrom, lenM, minutes: hours * 60, maxCat,
     meanD: samples.reduce((a, s) => a + s.d, 0) / samples.length, peakD: Math.max(...samples.map(s => s.d)),
     faaShare: samples.filter(s => s.faa).length / samples.length,
     hiFrac: foot.length ? hi / foot.length : 0, waterFrac: foot.length ? waterLandings / foot.length : 0, meanUnder, ecPerFh, ecPerFlight: ecPerFh * hours,
-    obstacles: [...obst.values()].sort((a, b) => b.agl_ft - a.agl_ft), powerlines: [...lines.keys()].map(pl => pl.props),
+    obstacles: [...obst.values()].sort((a, b) => b.agl_ft - a.agl_ft), buildings: [...bld.values()].sort((a, b) => b.h_ft - a.h_ft),
+    blockedShare: samples.filter(s => s.blocked).length / samples.length,
+    powerlines: [...lines.keys()].map(pl => pl.props),
     airspace: [...air.entries()].map(([name, v]) => ({ name, ...v })), noise, noiseSites: [...near.entries()].map(([s, db]) => ({ name: s.name, kind: s.kind, db })).sort((a, b) => b.db - a.db),
     laancShare: laanc.length / samples.length, minCeiling: laanc.length ? Math.min(...laanc.map(s => s.ceiling)) : null, overCeilingShare: overCeiling.length / samples.length,
-    halfWidth55: noiseHalfWidth(altFt, ac),
+    halfWidth55: noiseHalfWidth(altMin, ac),
   };
 }
 
+// ---------- Planning: clear buildings and obstacles ----------
+export const MAX_ALT_FT = 400;
+const roundUp = (x, step = 25) => Math.ceil(x / step) * step;
+
+/**
+ * Climb over: raise the waypoints at both ends of every leg that does not clear its obstacles by the vertical buffer,
+ * up to 400 ft and the facility map ceiling. Returns the new route and the legs it could not fix.
+ */
+export function planClimb(D, route, { altFt = 300, ...opt } = {}) {
+  const o = { ...DEFAULTS, ...opt }, alts = waypointAlts(route, altFt), pts = route.map(p => D.proj(p)), stuck = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], L = hyp(a, b), steps = Math.max(1, Math.ceil(L / o.sampleM));
+    let need = 0, cap = MAX_ALT_FT;
+    for (let s = 0; s <= steps; s++) {
+      const xy = [a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps];
+      need = Math.max(need, tallestNear(D, xy, o.clearM));
+      const c = facilityCeiling(D, xy); if (c != null) cap = Math.min(cap, c);
+    }
+    if (!need) continue;
+    const want = roundUp(need + o.obstacleVertFt);
+    if (want > cap) { stuck.push({ leg: i, needFt: want, capFt: cap }); continue; }
+    alts[i] = Math.max(alts[i], want); alts[i + 1] = Math.max(alts[i + 1], want);
+  }
+  return { route: route.map((p, i) => [p[0], p[1], alts[i]]), stuck };
+}
+
+/**
+ * Go around: A* on a 20 m grid around each leg, at the leg's altitude, avoiding every building and obstacle that
+ * does not clear by the vertical buffer, then pull the path tight. Waypoints keep their order.
+ */
+export function planAround(D, route, { altFt = 300, cellM = 15, marginM = 600, ...opt } = {}) {
+  const o = { ...DEFAULTS, ...opt }, alts = waypointAlts(route, altFt), pts = route.map(p => D.proj(p));
+  index(D);
+  // Via points (not the launch or drop) that sit inside a clearance ring move to the nearest clear spot.
+  const moved = [];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const r0 = o.clearM + cellM * 0.75;
+    if (!isBlocked(D, pts[i], alts[i], o, r0)) continue;
+    let best = null;
+    for (let rad = cellM; rad <= 300 && !best; rad += cellM) for (let k = 0; k < 24 && !best; k++) {
+      const q = [pts[i][0] + rad * Math.cos(k * Math.PI / 12), pts[i][1] + rad * Math.sin(k * Math.PI / 12)];
+      if (!isBlocked(D, q, alts[i], o, r0)) best = q;
+    }
+    if (best) { pts[i] = best; moved.push(i); }
+  }
+  const at = i => [...D.unproj(pts[i]), alts[i]];
+  const out = [at(0)], failed = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const alt = Math.min(alts[i], alts[i + 1]), a = pts[i], b = pts[i + 1];
+    const x0 = Math.min(a[0], b[0]) - marginM, y0 = Math.min(a[1], b[1]) - marginM;
+    const nx = Math.ceil((Math.max(a[0], b[0]) + marginM - x0) / cellM), ny = Math.ceil((Math.max(a[1], b[1]) + marginM - y0) / cellM);
+    const cxy = (i2, j2) => [x0 + (i2 + 0.5) * cellM, y0 + (j2 + 0.5) * cellM];
+    const blocked = new Uint8Array(nx * ny);
+    for (let j = 0; j < ny; j++) for (let k = 0; k < nx; k++) {
+      if (isBlocked(D, cxy(k, j), alt, o, o.clearM + cellM * 0.75)) blocked[j * nx + k] = 1;
+    }
+    const cell = p => [Math.min(nx - 1, Math.max(0, Math.floor((p[0] - x0) / cellM))), Math.min(ny - 1, Math.max(0, Math.floor((p[1] - y0) / cellM)))];
+    const [si, sj] = cell(a), [ti, tj] = cell(b), S = sj * nx + si, T = tj * nx + ti;
+    // Launch and drop pads may sit beside a tower: the aircraft climbs and lets down vertically within clearM of them.
+    const pad = Math.ceil((o.clearM + cellM) / cellM);
+    for (const [pi, pj] of [[si, sj, i === 0], [ti, tj, i + 1 === pts.length - 1]].filter(e => e[2])) for (let dj = -pad; dj <= pad; dj++) for (let di = -pad; di <= pad; di++) {
+      const X = pi + di, Y = pj + dj; if (X >= 0 && Y >= 0 && X < nx && Y < ny && Math.hypot(di, dj) <= pad) blocked[Y * nx + X] = 0;
+    }
+    const path = astar(nx, ny, blocked, S, T);
+    if (!path) { failed.push(i); out.push(at(i + 1)); continue; }
+    const xy = path.map(q => cxy(q % nx, Math.floor(q / nx)));
+    xy[0] = a; xy[xy.length - 1] = b;
+    const free = (p, q) => { const n = Math.ceil(hyp(p, q) / (cellM / 2)); for (let s = 1; s < n; s++) { const [ci, cj] = cell([p[0] + (q[0] - p[0]) * s / n, p[1] + (q[1] - p[1]) * s / n]); if (blocked[cj * nx + ci]) return false; } return true; };
+    // string pulling: keep only the turns the obstacles force
+    let k = 0;
+    while (k < xy.length - 1) {
+      let far = xy.length - 1;
+      while (far > k + 1 && !free(xy[k], xy[far])) far--;
+      if (far < xy.length - 1) out.push([...D.unproj(xy[far]), alt]);
+      k = far;
+    }
+    out.push(at(i + 1));
+  }
+  return { route: out.map(p => [+p[0].toFixed(6), +p[1].toFixed(6), p[2]]), failed, moved };
+}
+
+function astar(nx, ny, blocked, S, T) {
+  const g = new Float64Array(nx * ny).fill(Infinity), from = new Int32Array(nx * ny).fill(-1), done = new Uint8Array(nx * ny);
+  const tx = T % nx, ty = Math.floor(T / nx), hcost = q => Math.hypot(q % nx - tx, Math.floor(q / nx) - ty);
+  const heap = [[hcost(S), S]]; g[S] = 0;
+  const push = e => { heap.push(e); let c = heap.length - 1; while (c > 0) { const p = (c - 1) >> 1; if (heap[p][0] <= heap[c][0]) break; [heap[p], heap[c]] = [heap[c], heap[p]]; c = p; } };
+  const pop = () => { const top = heap[0], last = heap.pop(); if (heap.length) { heap[0] = last; let c = 0; for (;;) { const l = 2 * c + 1, r = l + 1; let m = c; if (l < heap.length && heap[l][0] < heap[m][0]) m = l; if (r < heap.length && heap[r][0] < heap[m][0]) m = r; if (m === c) break; [heap[m], heap[c]] = [heap[c], heap[m]]; c = m; } } return top; };
+  while (heap.length) {
+    const [, q] = pop();
+    if (done[q]) continue; done[q] = 1;
+    if (q === T) { const p = [q]; let c = q; while (from[c] >= 0) { c = from[c]; p.push(c); } return p.reverse(); }
+    const x = q % nx, y = Math.floor(q / nx);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dy) continue;
+      const X = x + dx, Y = y + dy; if (X < 0 || Y < 0 || X >= nx || Y >= ny) continue;
+      const n = Y * nx + X; if (blocked[n] || done[n]) continue;
+      if (dx && dy && (blocked[y * nx + X] || blocked[Y * nx + x])) continue; // no corner cutting
+      const ng = g[q] + (dx && dy ? Math.SQRT2 : 1);
+      if (ng < g[n]) { g[n] = ng; from[n] = q; push([ng + hcost(n), n]); }
+    }
+  }
+  return null;
+}
+
 // ---------- Findings ----------
+/** '300 ft AGL' or '250–375 ft AGL' when the route changes level. */
+export const altLabel = r => (r.levelled ? `${r.altMin}–${r.altMax}` : `${r.altMin}`) + ' ft AGL';
+
 export function findings(r) {
   const f = [];
   const pct = x => Math.round(x * 100) + '%';
@@ -214,13 +386,17 @@ export function findings(r) {
   else if (r.maxCat === 4) f.push(['warn', `${share(4)} of the route crosses Category 4 ground on the FAA operating categories map. Most of residential Seattle is Category 4, so this is the normal case for urban delivery; the safety case must carry it.`]);
   else if (r.maxCat === 3) f.push(['warn', 'Category 3 segments present.']);
   else f.push(['good', 'Entire route stays in Category 1–2 ground.']);
-  const hard = r.obstacles.filter(o => o.agl_ft >= r.altFt);
-  if (hard.length) f.push(['crit', `${hard.length} obstacle${hard.length > 1 ? 's' : ''} within ${r.opt.obstacleLateralM} m lateral reach or exceed ${r.altFt} ft AGL, tallest ${hard[0].agl_ft} ft (${hard[0].name || hard[0].kind}, ${hard[0].src}). Hard conflict.`]);
-  else if (r.obstacles.length) f.push(['warn', `${r.obstacles.length} obstacles within ${r.opt.obstacleLateralM} m rise to within ${r.opt.obstacleVertFt} ft of planned altitude.`]);
+  const through = r.buildings.filter(b => b.dm < r.opt.buildingHitM && b.h_ft >= b.alt - r.opt.obstacleVertFt);
+  if (through.length) f.push(['crit', `The route passes through or within ${r.opt.buildingHitM} m of ${through.length} building${through.length > 1 ? 's' : ''} that reach its altitude, tallest ${through[0].h_ft} ft${through[0].name ? ` (${through[0].name})` : ''}. Use Climb over or Go around.`]);
+  const hard = [...r.obstacles.filter(o => o.dm < r.opt.clearM), ...r.buildings.filter(b => !through.includes(b) && b.dm < r.opt.clearM).map(b => ({ ...b, agl_ft: b.h_ft, kind: 'building', src: 'OSM' }))].sort((a, b) => b.agl_ft - a.agl_ft);
+  if (hard.length) f.push(['crit', `${hard.length} obstacle${hard.length > 1 ? 's' : ''} within ${r.opt.clearM} m rise to within ${r.opt.obstacleVertFt} ft of the route's altitude, tallest ${hard[0].agl_ft} ft (${hard[0].name || hard[0].kind}, ${hard[0].src}). Not enough clearance.`]);
+  const close = r.obstacles.length + r.buildings.length - hard.length - through.length;
+  if (!hard.length && !through.length && close > 0) f.push(['warn', `${close} obstacles or buildings within ${r.opt.obstacleLateralM} m rise to within ${r.opt.obstacleVertFt} ft of the route's altitude.`]);
+  if (r.levelled) f.push(['good', `Altitude varies from ${r.altMin} to ${r.altMax} ft AGL along the route.`]);
   const cranes = r.obstacles.filter(o => o.temporary);
   if (cranes.length) f.push(['warn', `${cranes.length} construction crane${cranes.length > 1 ? 's' : ''} mapped near the route. Cranes move; check FAA construction notices before each operation.`]);
   if (r.powerlines.length) f.push(['warn', `Route crosses or runs within ${r.opt.powerlineM} m of ${r.powerlines.length} mapped transmission line${r.powerlines.length > 1 ? 's' : ''} below ${r.opt.powerlineMaxFt} ft. Distribution lines are not in the public data.`]);
-  if (r.overCeilingShare > 0) f.push(['crit', `${pct(r.overCeilingShare)} of the route is inside a UAS facility map grid with a ceiling below ${r.altFt} ft (lowest ${r.minCeiling} ft). Needs a LAANC further-coordination request or an airspace authorization.`]);
+  if (r.overCeilingShare > 0) f.push(['crit', `${pct(r.overCeilingShare)} of the route is inside a UAS facility map grid with a ceiling below its altitude (lowest ${r.minCeiling} ft). Needs a LAANC further-coordination request or an airspace authorization.`]);
   else if (r.laancShare > 0) f.push(['warn', `${pct(r.laancShare)} of the route is in controlled airspace; LAANC authorization required up to the grid ceiling (lowest ${r.minCeiling} ft).`]);
   for (const a of r.airspace) {
     if (a.kind === 'heliport') f.push(['crit', `${a.name} is ${Math.round(a.dm)} m from the route. Coordinate with the heliport operator; letter of agreement expected.`]);
@@ -233,7 +409,7 @@ export function findings(r) {
   else if (r.hiFrac > 0.05) f.push(['warn', `${pct(r.hiFrac)} of simulated failure landings fall on ${dense}.`]);
   if (r.waterFrac > 0.2) f.push(['good', `${pct(r.waterFrac)} of simulated failure landings fall in water.`]);
   if (r.ecPerFh > 1e-6) f.push(['warn', `Estimated ${r.ecPerFh.toExponential(1)} ground fatalities per flight hour at the assumed failure rate, above the 1e-6 target often used in ground-risk assessments.`]);
-  if (r.wind.kt >= 20) f.push(['warn', `${r.wind.kt} kt wind: failure drift up to ${Math.round(r.wind.kt * 0.5144 * 1.5 * (r.altFt / FT / r.ac.descent))} m downwind. Set a wind limit in the operations manual.`]);
+  if (r.wind.kt >= 20) f.push(['warn', `${r.wind.kt} kt wind: failure drift up to ${Math.round(r.wind.kt * 0.5144 * 1.5 * (r.altMax / FT / r.ac.descent))} m downwind. Set a wind limit in the operations manual.`]);
   if (r.noise.hospital) f.push(['warn', `${Math.round(r.noise.hospital)} dB at a hospital, above a 55 dB daytime target.`]);
   if (r.noise.school && r.tod !== 'night') f.push(['warn', `${Math.round(r.noise.school)} dB at ${r.noiseSites.filter(s => s.kind === 'school').length} school${r.noiseSites.filter(s => s.kind === 'school').length > 1 ? 's' : ''} during school hours.`]);
   return f;
