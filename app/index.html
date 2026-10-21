@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Corridor Seattle</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Layout: operations console. Map left, scoring rail right, generated package below. */
+:root{
+  --bg:#f3f4f1; --panel:#ffffff; --fg:#17201d; --muted:#5d6b66; --line:#d9ddd8;
+  --accent:#0d6b5a; --accent-ink:#ffffff;
+  --good:#2f8f4e; --warn:#c7811a; --crit:#c23b2e; --c2:#7fbf6a; --c4:#d8622a;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141917; --panel:#1c2220; --fg:#e8ebe8; --muted:#9aa6a1; --line:#2d3633;
+  --accent:#3fb79b; --accent-ink:#0e1513;
+  --good:#5fc27a; --warn:#e0a24a; --crit:#e2655a; --c2:#98d07f; --c4:#e88752; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --panel:#1c2220; --fg:#e8ebe8; --muted:#9aa6a1; --line:#2d3633;
+  --accent:#3fb79b; --accent-ink:#0e1513;
+  --good:#5fc27a; --warn:#e0a24a; --crit:#e2655a; --c2:#98d07f; --c4:#e88752; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px;line-height:1.45;padding:16px 16px 32px}
+header{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:baseline;margin-bottom:12px}
+h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px}
+@media(max-width:900px){.wrap{grid-template-columns:1fr}}
+.mapbox{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden;min-width:0}
+#map{height:min(72vh,720px);min-height:420px}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:10px;border-top:1px solid var(--line);align-items:center}
+button,select,input[type=number]{font:inherit;font-size:13px;padding:6px 10px;border-radius:4px;border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.layers{display:flex;gap:10px;flex-wrap:wrap;padding:0 10px 10px;font-size:12px;color:var(--muted)}
+.layers label{display:flex;gap:4px;align-items:center;cursor:pointer}
+.rail{display:flex;flex-direction:column;gap:12px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px}
+.card h2{font-size:12px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:500}
+.verdict{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:600}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-family:var(--mono);color:#fff}
+.pill.good{background:var(--good)}.pill.warn{background:var(--warn)}.pill.crit{background:var(--crit)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:13px;margin:0}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.seg{display:flex;gap:1px;height:14px;margin-top:6px}
+.seg i{flex:1;border-radius:1px;background:var(--line)}
+.c1{background:var(--good)!important}.c2{background:var(--c2)!important}.c3{background:var(--warn)!important}.c4{background:var(--c4)!important}.c5{background:var(--crit)!important}
+.findings{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.findings li{padding-left:10px;border-left:3px solid var(--line)}
+.findings li.warn{border-color:var(--warn)}.findings li.crit{border-color:var(--crit)}.findings li.good{border-color:var(--good)}
+.doc{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px 24px}
+.doc h2{font-size:18px;margin:0 0 4px}
+.doc h3{font-size:13px;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:18px 0 6px;font-weight:500}
+.doc p,.doc li{max-width:78ch}
+.doc table{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.doc td,.doc th{border-bottom:1px solid var(--line);padding:5px 12px 5px 0;text-align:left;vertical-align:top}
+.doc th{font-weight:500;color:var(--muted)}
+.tablewrap{overflow-x:auto}
+.docbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.note{font-size:12px;color:var(--muted)}
+.hint{position:absolute;top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:12px;color:var(--muted);pointer-events:none;z-index:2;max-width:calc(100% - 20px)}
+.legend{position:absolute;bottom:28px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:11px;font-family:var(--mono);display:flex;gap:10px;flex-wrap:wrap;z-index:2;max-width:calc(100% - 20px)}
+.legend span{display:flex;align-items:center;gap:4px}.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.credits{margin-top:16px;max-width:110ch}.credits a{color:inherit}
+.toast{position:fixed;bottom:16px;right:16px;background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:4px;font-size:13px;z-index:10}
+.maplibregl-popup-content{background:var(--panel);color:var(--fg);font-family:var(--font);font-size:12px}
+.loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--panel);z-index:3;color:var(--muted)}
+@media print{header,.wrap,.docbar{display:none}.doc{border:0;margin:0;padding:0}body{padding:0}}
+</style>
+</head>
+<body>
+<header>
+  <div><div class="eyebrow">Corridor · delivery route safety case · Seattle</div><h1>Draw the route, file the waiver</h1></div>
+  <div class="note" id="dataNote">Loading public data…</div>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="mapbox">
+      <div id="map" role="application" aria-label="Seattle route map"></div>
+      <div class="loading" id="loading">Loading census, FAA and OSM layers…</div>
+      <div class="hint" id="hint">Click to place waypoints. Double-click to finish.</div>
+      <div class="legend">
+        <span><i class="c2"></i>Cat 2</span><span><i class="c3"></i>Cat 3</span><span><i class="c4"></i>Cat 4</span><span><i class="c5"></i>Cat 5</span>
+        <span><i style="background:var(--accent)"></i>Noise ≥ 55 dB</span><span><i style="background:var(--crit);opacity:.5;border-radius:50%"></i>Failure landing</span>
+      </div>
+    </div>
+    <div class="toolbar">
+      <select id="route" aria-label="Sample route"></select>
+      <select id="aircraft" aria-label="Aircraft"></select>
+      <select id="alt" aria-label="Altitude"><option value="150">150 ft AGL</option><option value="200">200 ft AGL</option><option value="250">250 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="400">400 ft AGL</option></select>
+      <select id="wind" aria-label="Wind"><option value="calm">Wind 5 kt S</option><option value="typical" selected>Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="live">Wind: live at KBFI</option></select>
+      <select id="tod" aria-label="Time of day"><option value="day" selected>Weekday daytime</option><option value="night">Overnight</option><option value="event">Stadium event day</option></select>
+      <button id="undo">Undo point</button>
+      <button id="clear">Clear</button>
+      <button class="primary" id="share">Copy share link</button>
+    </div>
+    <div class="layers">
+      <label><input type="checkbox" data-layer="density" checked>Population</label>
+      <label><input type="checkbox" data-layer="faacat">FAA categories</label>
+      <label><input type="checkbox" data-layer="laanc" checked>LAANC grid</label>
+      <label><input type="checkbox" data-layer="obstacles" checked>Obstacles</label>
+      <label><input type="checkbox" data-layer="power" checked>Power lines</label>
+      <label><input type="checkbox" data-layer="sites" checked>Sites</label>
+      <label><input type="checkbox" data-layer="foot" checked>Footprints</label>
+      <label><input type="checkbox" data-layer="noise" checked>Noise</label>
+      <label><input type="checkbox" data-layer="area" checked>Intended area</label>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <div class="card">
+      <h2>Verdict</h2>
+      <div class="verdict" id="verdict"><span class="pill warn">—</span><span>Draw a route</span></div>
+      <div class="note" id="verdictNote">Category comes from the FAA operating categories map at the densest point on the route.</div>
+    </div>
+    <div class="card"><h2>Route</h2><dl class="kv" id="routeKv"></dl>
+      <div class="note" style="margin-top:6px">FAA category along the route</div><div class="seg" id="segbar"></div></div>
+    <div class="card"><h2>Ground risk</h2><dl class="kv" id="riskKv"></dl></div>
+    <div class="card"><h2>Airspace and obstacles</h2><dl class="kv" id="airKv"></dl></div>
+    <div class="card"><h2>Noise</h2><dl class="kv" id="noiseKv"></dl></div>
+    <div class="card"><h2>Findings</h2><ul class="findings" id="findings"></ul></div>
+  </aside>
+</div>
+
+<section class="doc" id="doc">
+  <div class="docbar"><div class="eyebrow">Generated package</div>
+    <button class="primary" id="dlMd">Download .md</button><button id="dlGeo">Download GeoJSON</button><button id="print">Print / PDF</button>
+    <span class="note">Concept of operations, hazard assessment and area of intended flight, filled from the analysis above.</span></div>
+  <div id="docBody"><p class="note">The package appears once a route is scored.</p></div>
+</section>
+
+<footer class="note credits">
+  Prototype for planning and discussion. Not an FAA product and not a filed document; verify every finding before relying on it.
+  Data: US Census Bureau (2020 blocks, LEHD LODES), FAA (Digital Obstacle File, UAS Facility Maps, ADDS), National Weather Service,
+  © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL), basemap by <a href="https://openfreemap.org">OpenFreeMap</a> / OpenMapTiles.
+  <a href="https://github.com/sarkar-chicory/skylanes-seattle">Source on GitHub</a>.
+</footer>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module" src="ui.js"></script>
+</body>
+</html>

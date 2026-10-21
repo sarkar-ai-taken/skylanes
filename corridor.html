@@ -1,0 +1,385 @@
+<title>Corridor Seattle</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: operations console — map left, scoring rail right, generated document below */
+:root{
+  --bg:#f3f4f1; --panel:#ffffff; --fg:#17201d; --muted:#5d6b66; --line:#d9ddd8;
+  --accent:#0d6b5a; --accent-ink:#ffffff;
+  --water:#c9dde3; --land:#e8eae4; --road:#ffffff; --bld:#cfd3cc; --bld-edge:#9ea59e;
+  --good:#2f8f4e; --warn:#c7811a; --crit:#c23b2e;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141917; --panel:#1c2220; --fg:#e8ebe8; --muted:#9aa6a1; --line:#2d3633;
+  --accent:#3fb79b; --accent-ink:#0e1513;
+  --water:#1e3038; --land:#20272a; --road:#2e3738; --bld:#39423f; --bld-edge:#5b6662;
+  --good:#5fc27a; --warn:#e0a24a; --crit:#e2655a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --panel:#1c2220; --fg:#e8ebe8; --muted:#9aa6a1; --line:#2d3633;
+  --accent:#3fb79b; --accent-ink:#0e1513;
+  --water:#1e3038; --land:#20272a; --road:#2e3738; --bld:#39423f; --bld-edge:#5b6662;
+  --good:#5fc27a; --warn:#e0a24a; --crit:#e2655a; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px;line-height:1.45;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px 32px}
+header{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:baseline;margin-bottom:12px}
+h1{font-size:20px;font-weight:600;margin:0;letter-spacing:-.01em}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px}
+@media(max-width:900px){.wrap{grid-template-columns:1fr}}
+.map{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden;min-width:0}
+canvas{display:block;width:100%;height:auto;cursor:crosshair}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;padding:10px;border-top:1px solid var(--line);align-items:center}
+button,select{font:inherit;font-size:13px;padding:6px 12px;border-radius:4px;border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:500}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.layers{display:flex;gap:10px;flex-wrap:wrap;margin-left:auto;font-size:12px;color:var(--muted)}
+.layers label{display:flex;gap:4px;align-items:center}
+.rail{display:flex;flex-direction:column;gap:12px;min-width:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px}
+.card h2{font-size:12px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:500}
+.verdict{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:600}
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-family:var(--mono);color:#fff}
+.pill.good{background:var(--good)}.pill.warn{background:var(--warn)}.pill.crit{background:var(--crit)}
+.kv{display:grid;grid-template-columns:1fr auto;gap:4px 12px;font-size:13px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:4px}
+.bar i{display:block;height:100%;background:var(--accent)}
+.seg{display:flex;gap:2px;height:14px;margin-top:6px}
+.seg i{flex:1;border-radius:2px;background:var(--line)}
+.seg i.c1{background:var(--good)}.seg i.c2{background:#7fbf6a}.seg i.c3{background:var(--warn)}.seg i.c4{background:#d8622a}.seg i.c5{background:var(--crit)}
+.findings{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.findings li{padding-left:10px;border-left:3px solid var(--line)}
+.findings li.warn{border-color:var(--warn)}.findings li.crit{border-color:var(--crit)}.findings li.good{border-color:var(--good)}
+.doc{margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px 24px;max-width:100%}
+.doc h2{font-size:18px;margin:0 0 4px}
+.doc h3{font-size:13px;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:18px 0 6px;font-weight:500}
+.doc p,.doc li{max-width:72ch}
+.doc table{border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+.doc td,.doc th{border-bottom:1px solid var(--line);padding:5px 10px 5px 0;text-align:left;vertical-align:top}
+.doc th{font-weight:500;color:var(--muted)}
+.tablewrap{overflow-x:auto}
+.docbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.note{font-size:12px;color:var(--muted)}
+.hint{position:absolute;top:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:12px;color:var(--muted);pointer-events:none}
+.legend{position:absolute;bottom:10px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:11px;font-family:var(--mono);display:flex;gap:10px;flex-wrap:wrap}
+.legend span{display:flex;align-items:center;gap:4px}.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.toast{position:fixed;bottom:16px;right:16px;background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:4px;font-size:13px}
+@media(prefers-reduced-motion:no-preference){.verdict{transition:color .2s}}
+</style>
+
+<header>
+  <div><div class="eyebrow">Corridor · pre-flight planning · Seattle metro</div><h1>Low-altitude route planner</h1></div>
+  <div class="note">Prototype on a synthesized Seattle tile. Density, buildings and wind are modeled from public patterns, not licensed data.</div>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="map">
+      <canvas id="map" width="1000" height="720" aria-label="Seattle route map"></canvas>
+      <div class="hint" id="hint">Click to place waypoints. Double-click to finish. Scroll the rail for scoring.</div>
+      <div class="legend"><span><i style="background:var(--good)"></i>Cat 1–2</span><span><i style="background:var(--warn)"></i>Cat 3</span><span><i style="background:var(--crit)"></i>Cat 4–5</span><span><i style="background:var(--accent)"></i>Route</span><span><i style="background:#c23b2e;opacity:.4"></i>Failure footprint</span></div>
+    </div>
+    <div class="toolbar">
+      <select id="aircraft" aria-label="Aircraft">
+        <option value="quad">Quad, 2.5 lb payload (Wing-class)</option>
+        <option value="fixed">Fixed-wing VTOL, 4 lb (Zipline-class)</option>
+        <option value="heavy">Heavy lift, 55 lb (inspection)</option>
+      </select>
+      <select id="alt" aria-label="Altitude"><option value="200">200 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="400">400 ft AGL</option></select>
+      <select id="wind" aria-label="Wind"><option value="5">Wind 5 kt S</option><option value="12" selected>Wind 12 kt SW</option><option value="22">Wind 22 kt SW (gusting)</option></select>
+      <select id="tod" aria-label="Time of day"><option value="day" selected>Weekday 10:00</option><option value="rush">Weekday 17:30</option><option value="night">Weekday 02:00</option><option value="game">Game day 19:00</option></select>
+      <button id="sample">Load sample route</button>
+      <button id="clear">Clear</button>
+      <div class="layers">
+        <label><input type="checkbox" id="lDensity" checked>Density</label>
+        <label><input type="checkbox" id="lNoise" checked>Noise</label>
+        <label><input type="checkbox" id="lFoot" checked>Footprints</label>
+        <label><input type="checkbox" id="lAir" checked>Airspace</label>
+      </div>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <div class="card">
+      <h2>Verdict</h2>
+      <div class="verdict" id="verdict"><span class="pill warn">—</span><span>Draw a route</span></div>
+      <div class="note" id="verdictNote">Part 108 category is set by the densest segment, not the average.</div>
+    </div>
+    <div class="card">
+      <h2>Route</h2>
+      <dl class="kv" id="routeKv"></dl>
+      <div class="note" style="margin-top:6px">Density category along the route</div>
+      <div class="seg" id="segbar"></div>
+    </div>
+    <div class="card">
+      <h2>Ground risk</h2>
+      <dl class="kv" id="riskKv"></dl>
+    </div>
+    <div class="card">
+      <h2>Noise</h2>
+      <dl class="kv" id="noiseKv"></dl>
+    </div>
+    <div class="card">
+      <h2>Findings</h2>
+      <ul class="findings" id="findings"></ul>
+    </div>
+  </aside>
+</div>
+
+<section class="doc" id="doc">
+  <div class="docbar"><div class="eyebrow">Generated package</div><button class="primary" id="copyDoc">Copy as text</button><span class="note">Concept of operations + hazard assessment, filled from the simulation above.</span></div>
+  <div id="docBody"><p class="note">The package appears once a route is scored.</p></div>
+</section>
+
+<script>
+(() => {
+// ---------- World model: synthesized Seattle tile (~9 km × 6.5 km, Ballard to Capitol Hill) ----------
+const W=1000,H=720, M_PER_PX=9; // metres per pixel
+const cv=document.getElementById('map'),ctx=cv.getContext('2d');
+let seed=7; const rnd=()=>{seed=(seed*16807)%2147483647;return (seed-1)/2147483646};
+
+// Water polygons (Puget Sound west, Lake Union centre, Ship Canal, Lake Washington edge east)
+const water=[
+  [[0,0],[180,0],[150,120],[120,260],[90,420],[110,560],[60,720],[0,720]],                   // Puget Sound / Elliott Bay
+  [[520,250],[600,230],[640,300],[620,420],[560,450],[500,410],[480,330]],                   // Lake Union
+  [[150,120],[520,250],[520,290],[150,160]],                                                 // Ship Canal (approx)
+  [[940,0],[1000,0],[1000,720],[960,720],[950,400]],                                         // Lake Washington edge
+  [[600,230],[800,190],[820,220],[640,300]]                                                  // Portage Bay
+];
+// Named districts: centre, radius, base density (people/km²), building height mean (m)
+const districts=[
+  {n:'Downtown',x:360,y:560,r:110,d:12000,h:60},{n:'Belltown',x:330,y:470,r:70,d:14000,h:45},
+  {n:'South Lake Union',x:470,y:470,r:80,d:9000,h:35},{n:'Capitol Hill',x:640,y:520,r:110,d:11000,h:18},
+  {n:'Queen Anne',x:330,y:330,r:110,d:6500,h:12},{n:'Fremont',x:430,y:200,r:80,d:5500,h:12},
+  {n:'Ballard',x:230,y:120,r:110,d:5000,h:10},{n:'Wallingford',x:560,y:150,r:90,d:5200,h:9},
+  {n:'University District',x:760,y:120,r:100,d:9500,h:20},{n:'Eastlake',x:620,y:380,r:50,d:7000,h:12},
+  {n:'Magnolia',x:140,y:330,r:80,d:2800,h:8},{n:'Interbay',x:230,y:300,r:60,d:900,h:12},
+  {n:'Montlake',x:820,y:300,r:70,d:4200,h:9},{n:'Madison Park',x:900,y:520,r:80,d:3800,h:9},
+  {n:'Central District',x:760,y:640,r:90,d:7800,h:10},{n:'Stadium District',x:420,y:690,r:70,d:1500,h:25}
+];
+const sensitive=[
+  {n:'Harborview Medical Center',x:560,y:620,t:'hospital'},{n:'UW Medical Center',x:790,y:200,t:'hospital'},
+  {n:'Swedish First Hill',x:600,y:600,t:'hospital'},{n:'Seattle Children\'s',x:950,y:150,t:'hospital'},
+  {n:'Lumen Field',x:400,y:690,t:'stadium'},{n:'Climate Pledge Arena',x:340,y:420,t:'stadium'},
+  {n:'Garfield High School',x:760,y:600,t:'school'},{n:'Ballard High School',x:250,y:90,t:'school'},
+  {n:'Space Needle (184 m)',x:350,y:415,t:'tower'},{n:'Columbia Center (284 m)',x:390,y:590,t:'tower'},
+  {n:'Harborview heliport',x:565,y:615,t:'heli'},{n:'Boeing Field approach (KBFI)',x:560,y:715,t:'air'}
+];
+// Buildings: grid with jitter, height from district
+const bld=[];
+for(let gx=20;gx<W;gx+=22)for(let gy=20;gy<H;gy+=22){
+  const x=gx+rnd()*8,y=gy+rnd()*8; if(inWater(x,y))continue;
+  const dd=nearestDistrict(x,y); if(!dd||rnd()>0.78)continue;
+  const h=Math.max(4,dd.h*(0.5+rnd()*1.4)*(1-Math.min(1,dist(x,y,dd.x,dd.y)/dd.r)*0.6));
+  bld.push({x,y,w:9+rnd()*8,h});
+}
+sensitive.filter(s=>s.t==='tower').forEach(s=>bld.push({x:s.x,y:s.y,w:14,h:s.n.includes('284')?284:184,tower:true}));
+
+function inWater(x,y){return water.some(p=>pip(x,y,p))}
+function pip(x,y,p){let c=false;for(let i=0,j=p.length-1;i<p.length;j=i++){const[xi,yi]=p[i],[xj,yj]=p[j];if((yi>y)!==(yj>y)&&x<(xj-xi)*(y-yi)/(yj-yi)+xi)c=!c}return c}
+function dist(a,b,c,d){return Math.hypot(a-c,b-d)}
+function nearestDistrict(x,y){let b=null,bd=1e9;for(const d of districts){const k=dist(x,y,d.x,d.y)/d.r;if(k<1.1&&k<bd){bd=k;b=d}}return b}
+function density(x,y,tod){ // people per km² on the ground
+  if(inWater(x,y))return 20;
+  let v=400;
+  for(const d of districts){const k=dist(x,y,d.x,d.y)/d.r;if(k<1.2)v+=d.d*Math.max(0,1-k*k)}
+  const mult={day:1,rush:1.25,night:0.45,game:1}[tod];
+  v*=mult;
+  if(tod==='rush'){for(const d of districts)if(['Downtown','Belltown','South Lake Union'].includes(d.n)&&dist(x,y,d.x,d.y)<d.r)v*=1.3}
+  if(tod==='game'){const s=sensitive[4];if(dist(x,y,s.x,s.y)<60)v+=60000*(1-dist(x,y,s.x,s.y)/60)}
+  return v;
+}
+function cat(d){return d<50?1:d<500?2:d<2500?3:d<10000?4:5} // Part 108 style density categories (prototype thresholds)
+
+// ---------- Aircraft and physics ----------
+const AC={
+  quad:{name:'Multirotor, 2.5 lb payload',mtow:7.5,spd:18,src:72,glide:0,descent:5,lostlink:'hover 30 s then return-to-launch',chute:false},
+  fixed:{name:'Fixed-wing VTOL, 4 lb payload',mtow:22,spd:28,src:68,glide:9,descent:3,lostlink:'continue to next waypoint, then loiter',chute:true},
+  heavy:{name:'Heavy-lift multirotor, 55 lb',mtow:55,spd:14,src:84,glide:0,descent:7,lostlink:'immediate controlled descent',chute:true}
+};
+const WIND={5:{kt:5,dir:180,g:0.1},12:{kt:12,dir:225,g:0.25},22:{kt:22,dir:225,g:0.5}};
+
+// Monte Carlo failure footprint at one point: returns array of landing points (px)
+function footprint(x,y,altFt,ac,w,n){
+  const pts=[];const alt=altFt*0.3048;const wms=w.kt*0.5144;
+  for(let i=0;i<n;i++){
+    const mode=rnd();let r,ang=rnd()*Math.PI*2;
+    const gust=1+(rnd()-0.5)*2*w.g;
+    const fall=alt/(ac.descent*(0.7+rnd()*0.6)); // seconds
+    const drift=wms*gust*fall;
+    let dx=drift*Math.sin(w.dir*Math.PI/180)*-1, dy=drift*Math.cos(w.dir*Math.PI/180);
+    if(mode<0.35){ // power loss / ballistic
+      r=alt*0.15*rnd();
+    }else if(mode<0.7&&ac.glide){ // glide
+      r=alt*ac.glide*(0.4+rnd()*0.6);
+    }else if(mode<0.85){ // fly-away segment
+      r=ac.spd*(2+rnd()*8); ang=w.dir*Math.PI/180+(rnd()-0.5);
+    }else{ r=alt*0.3*rnd(); }
+    if(ac.chute&&rnd()<0.8){dx*=2.2;dy*=2.2;r*=0.3}
+    pts.push([x+(r*Math.cos(ang)+dx)/M_PER_PX, y+(r*Math.sin(ang)+dy)/M_PER_PX]);
+  }
+  return pts;
+}
+function noiseAt(d,altFt,ac){ // dB at ground, spherical spreading from source level at 1 m
+  const r=Math.hypot(d,altFt*0.3048);return ac.src-20*Math.log10(Math.max(1,r))-0.005*r;
+}
+
+// ---------- Route state ----------
+let route=[],finished=false,result=null;
+const $=id=>document.getElementById(id);
+const sample=[[250,110],[300,220],[420,330],[480,440],[560,560],[640,610]];
+
+cv.addEventListener('click',e=>{if(finished){route=[];finished=false}const p=pt(e);route.push(p);score();});
+cv.addEventListener('dblclick',e=>{e.preventDefault();if(route.length>1){finished=true;score()}});
+function pt(e){const r=cv.getBoundingClientRect();return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*H/r.height]}
+$('sample').onclick=()=>{route=sample.map(p=>p.slice());finished=true;score()};
+$('clear').onclick=()=>{route=[];finished=false;result=null;score()};
+['aircraft','alt','wind','tod','lDensity','lNoise','lFoot','lAir'].forEach(id=>$(id).addEventListener('change',score));
+
+// ---------- Scoring ----------
+function score(){
+  const ac=AC[$('aircraft').value],altFt=+$('alt').value,w=WIND[$('wind').value],tod=$('tod').value;
+  result=null;
+  if(route.length>1){
+    seed=99;
+    const segs=[],foot=[],noiseHits={hospital:0,school:0,stadium:0};
+    let lenM=0,maxCat=1,sumD=0,n=0,obst=[],hiExposure=0,over=0;
+    for(let i=0;i<route.length-1;i++){
+      const[a,b]=[route[i],route[i+1]];const L=dist(a[0],a[1],b[0],b[1]);lenM+=L*M_PER_PX;
+      const steps=Math.max(2,Math.round(L/10));
+      for(let s=0;s<steps;s++){
+        const t=s/steps,x=a[0]+(b[0]-a[0])*t,y=a[1]+(b[1]-a[1])*t;
+        const d=density(x,y,tod),c=cat(d);segs.push({x,y,d,c});sumD+=d;n++;maxCat=Math.max(maxCat,c);
+        // obstacles within 60 m lateral, height within 50 ft of altitude
+        for(const B of bld){if(dist(x,y,B.x,B.y)*M_PER_PX<60&&B.h*3.281>altFt-50)obst.push(B)}
+        // noise
+        for(const S of sensitive){if(S.t in noiseHits){const dm=dist(x,y,S.x,S.y)*M_PER_PX;const db=noiseAt(dm,altFt,ac);if(db>55)noiseHits[S.t]=Math.max(noiseHits[S.t],db)}}
+        if(s%4===0){const f=footprint(x,y,altFt,ac,w,40);foot.push(...f);for(const p of f){const pd=density(p[0],p[1],tod);over+=pd;if(cat(pd)>=4)hiExposure++}}
+      }
+    }
+    const uniqObst=[...new Set(obst)];
+    const expectedPeopleUnder=foot.length?over/foot.length:0;
+    const airspace=[];
+    for(const p of segs){if(dist(p.x,p.y,565,615)*M_PER_PX<800)airspace.push('Harborview heliport (within 800 m)');if(p.y>680&&p.x>480&&p.x<640)airspace.push('KBFI Class D approach surface');if(tod==='game'&&dist(p.x,p.y,400,690)*M_PER_PX<900)airspace.push('Lumen Field TFR (game day, 3 NM for crewed; local advisory for UAS)')}
+    const uniqAir=[...new Set(airspace)];
+    const towers=uniqObst.filter(b=>b.tower);
+    result={ac,altFt,w,tod,segs,foot,lenM,maxCat,avgD:sumD/n,uniqObst,towers,noiseHits,expectedPeopleUnder,hiFrac:foot.length?hiExposure/foot.length:0,uniqAir,
+      minutes:lenM/ac.spd/60, districtsCrossed:[...new Set(segs.map(s=>nearestDistrict(s.x,s.y)).filter(Boolean).map(d=>d.n))]};
+  }
+  draw();renderRail();renderDoc();
+}
+
+// ---------- Drawing ----------
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim()}
+function draw(){
+  const tod=$('tod').value;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle=css('--land');ctx.fillRect(0,0,W,H);
+  // density heat
+  if($('lDensity').checked){
+    for(let x=0;x<W;x+=12)for(let y=0;y<H;y+=12){if(inWater(x+6,y+6))continue;const c=cat(density(x+6,y+6,tod));
+      ctx.fillStyle=c<=2?css('--good'):c===3?css('--warn'):css('--crit');ctx.globalAlpha=c<=2?0.06:c===3?0.14:0.22+(c-4)*0.1;ctx.fillRect(x,y,12,12)}
+    ctx.globalAlpha=1;
+  }
+  // water
+  ctx.fillStyle=css('--water');for(const p of water){ctx.beginPath();p.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));ctx.closePath();ctx.fill()}
+  // roads: arterials
+  ctx.strokeStyle=css('--road');ctx.lineWidth=2;ctx.globalAlpha=.8;
+  [[[0,560],[1000,540]],[[0,330],[1000,310]],[[360,0],[380,720]],[[640,0],[660,720]],[[200,160],[900,200]],[[150,0],[160,720]],[[860,0],[880,720]]].forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke()});
+  ctx.globalAlpha=1;
+  // buildings (2.5D)
+  for(const B of bld){const hpx=Math.min(60,B.h/4);ctx.fillStyle=css('--bld-edge');ctx.fillRect(B.x+2,B.y-hpx+2,B.w,hpx);ctx.fillStyle=B.tower?css('--fg'):css('--bld');ctx.globalAlpha=B.tower?.5:1;ctx.fillRect(B.x,B.y-hpx,B.w,B.w);ctx.globalAlpha=1}
+  // airspace
+  if($('lAir').checked){ctx.setLineDash([4,4]);ctx.strokeStyle=css('--crit');ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(565,615,800/M_PER_PX,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.moveTo(480,720);ctx.lineTo(560,650);ctx.lineTo(640,720);ctx.stroke();if(tod==='game'){ctx.beginPath();ctx.arc(400,690,900/M_PER_PX,0,Math.PI*2);ctx.stroke()}ctx.setLineDash([])}
+  // sensitive sites
+  ctx.font='11px '+css('--mono');
+  for(const S of sensitive){ctx.fillStyle=S.t==='hospital'||S.t==='heli'?css('--crit'):S.t==='school'?css('--warn'):css('--muted');ctx.beginPath();ctx.arc(S.x,S.y,3.5,0,Math.PI*2);ctx.fill();ctx.fillStyle=css('--fg');ctx.globalAlpha=.75;ctx.fillText(S.n,S.x+6,S.y+4);ctx.globalAlpha=1}
+  // district labels
+  ctx.font='600 12px '+css('--font');ctx.fillStyle=css('--muted');for(const d of districts)ctx.fillText(d.n.toUpperCase(),d.x-ctx.measureText(d.n).width/2,d.y);
+  // results
+  if(result){
+    if($('lFoot').checked){ctx.fillStyle=css('--crit');ctx.globalAlpha=.08;for(const p of result.foot){ctx.beginPath();ctx.arc(p[0],p[1],3,0,Math.PI*2);ctx.fill()}ctx.globalAlpha=1}
+    if($('lNoise').checked){const r55=Math.sqrt(Math.max(0,Math.pow(10,(result.ac.src-55)/20)**2-(result.altFt*0.3048)**2))/M_PER_PX;ctx.strokeStyle=css('--accent');ctx.globalAlpha=.35;ctx.lineWidth=r55*2;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();route.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();ctx.globalAlpha=1}
+    // route colored by category
+    for(let i=0;i<result.segs.length-1;i++){const a=result.segs[i],b=result.segs[i+1];ctx.strokeStyle=a.c<=2?css('--good'):a.c===3?css('--warn'):css('--crit');ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}
+    // obstacle conflicts
+    ctx.strokeStyle=css('--crit');ctx.lineWidth=2;for(const B of result.uniqObst){ctx.strokeRect(B.x-3,B.y-Math.min(60,B.h/4)-3,B.w+6,Math.min(60,B.h/4)+B.w+6)}
+  }
+  // waypoints
+  ctx.fillStyle=css('--accent');ctx.strokeStyle=css('--panel');ctx.lineWidth=2;
+  route.forEach((p,i)=>{ctx.beginPath();ctx.arc(p[0],p[1],6,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle=css('--panel');ctx.font='600 9px '+css('--mono');ctx.fillText(i===0?'L':i===route.length-1&&finished?'D':i,p[0]-3,p[1]+3);ctx.fillStyle=css('--accent')});
+  if(!finished&&route.length>1){ctx.strokeStyle=css('--accent');ctx.setLineDash([6,4]);ctx.lineWidth=1.5;ctx.beginPath();route.forEach((p,i)=>i?ctx.lineTo(...p):ctx.moveTo(...p));ctx.stroke();ctx.setLineDash([])}
+  $('hint').textContent=route.length?finished?'Route complete. Click to start a new one.':'Keep clicking. Double-click to finish.':'Click to place waypoints. Double-click to finish.';
+}
+
+// ---------- Rail ----------
+function kv(id,rows){$(id).innerHTML=rows.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('')}
+function renderRail(){
+  if(!result){$('verdict').innerHTML='<span class="pill warn">—</span><span>Draw a route</span>';['routeKv','riskKv','noiseKv'].forEach(i=>$(i).innerHTML='');$('segbar').innerHTML='';$('findings').innerHTML='';return}
+  const r=result,f=[];
+  const regime=r.maxCat<=2?'Permit (Part 108 low-density)':r.maxCat===3?'Permit with mitigations':'Certificate required';
+  if(r.maxCat>=4)f.push(['crit',`Route crosses Category ${r.maxCat} density. Needs an operating certificate, strategic deconfliction and detect-and-avoid, or reroute around the densest ${Math.round(r.segs.filter(s=>s.c>=4).length/r.segs.length*100)}% of the path.`]);
+  else if(r.maxCat===3)f.push(['warn','Category 3 segments present. Permit path is open with recordkeeping and right-of-way mitigations.']);
+  else f.push(['good','Entire route stays in Category 1–2 density.']);
+  if(r.towers.length)f.push(['crit',`Route passes within 60 m of ${r.towers.map(t=>sensitive.find(s=>s.x===t.x).n).join(', ')}, which exceeds planned altitude. Hard conflict.`]);
+  else if(r.uniqObst.length)f.push(['warn',`${r.uniqObst.length} structures within 60 m lateral rise to within 50 ft of ${r.altFt} ft AGL. Raise altitude or widen offset.`]);
+  if(r.uniqAir.length)r.uniqAir.forEach(a=>f.push(['crit',`Airspace conflict: ${a}.`]));
+  if(r.hiFrac>0.15)f.push(['crit',`${Math.round(r.hiFrac*100)}% of simulated failure landings fall in Category 4–5 ground. ${r.ac.chute?'Parachute reduces impact but widens drift under this wind.':'Consider a parachute system to lower impact energy.'}`]);
+  else if(r.hiFrac>0.03)f.push(['warn',`${Math.round(r.hiFrac*100)}% of failure landings reach Category 4–5 ground.`]);
+  if(r.w.kt>=22)f.push(['warn',`${r.w.kt} kt gusting SW: failure drift up to ${Math.round(r.w.kt*0.5144*1.5*(r.altFt*0.3048/r.ac.descent))} m downwind. Set a wind limit in the ops manual.`]);
+  if(r.noiseHits.hospital>0)f.push(['warn',`${Math.round(r.noiseHits.hospital)} dB at a hospital façade. Exceeds a typical 55 dB daytime target.`]);
+  if(r.noiseHits.school>0&&r.tod!=='night')f.push(['warn',`${Math.round(r.noiseHits.school)} dB at a school during hours.`]);
+  if(r.tod==='night')f.push(['good','Night window: ground density down ~55%, but noise tolerance is lower (45 dB typical).']);
+  if(r.tod==='game')f.push(['crit','Game-day load adds ~60,000 people near Lumen Field. Part 108 prohibits overflight of open-air assemblies.']);
+  const worst=f.some(x=>x[0]==='crit')?'crit':f.some(x=>x[0]==='warn')?'warn':'good';
+  $('verdict').innerHTML=`<span class="pill ${worst}">Cat ${r.maxCat}</span><span>${worst==='crit'?'Not fileable as drawn':worst==='warn'?'Fileable with mitigations':'Fileable'}</span>`;
+  $('verdictNote').textContent=regime+'. Category is set by the densest segment, not the average.';
+  kv('routeKv',[['Length',(r.lenM/1000).toFixed(2)+' km'],['Flight time',r.minutes.toFixed(1)+' min at '+r.ac.spd+' m/s'],['Altitude',r.altFt+' ft AGL'],['Districts',r.districtsCrossed.join(', ')||'—'],['Wind',r.w.kt+' kt']]);
+  $('segbar').innerHTML=r.segs.filter((_,i)=>i%Math.ceil(r.segs.length/40)===0).map(s=>`<i class="c${s.c}" title="${Math.round(s.d)} /km²"></i>`).join('');
+  kv('riskKv',[['Peak density',Math.round(Math.max(...r.segs.map(s=>s.d))).toLocaleString()+' /km²'],['Mean density',Math.round(r.avgD).toLocaleString()+' /km²'],['Failure landings in Cat 4–5',Math.round(r.hiFrac*100)+'%'],['Mean density under footprint',Math.round(r.expectedPeopleUnder).toLocaleString()+' /km²'],['Obstacle conflicts',r.uniqObst.length],['Footprint samples',r.foot.length]]);
+  const r55=Math.round(Math.sqrt(Math.max(0,Math.pow(10,(r.ac.src-55)/20)**2-(r.altFt*0.3048)**2)));
+  kv('noiseKv',[['Source level',r.ac.src+' dB @ 1 m'],['Directly below',Math.round(noiseAt(0,r.altFt,r.ac))+' dB'],['55 dB half-width',r55+' m'],['Hospital max',r.noiseHits.hospital?Math.round(r.noiseHits.hospital)+' dB':'< 55 dB'],['School max',r.noiseHits.school?Math.round(r.noiseHits.school)+' dB':'< 55 dB']]);
+  $('findings').innerHTML=f.map(([c,t])=>`<li class="${c}">${t}</li>`).join('');
+}
+
+// ---------- Document ----------
+function renderDoc(){
+  if(!result){$('docBody').innerHTML='<p class="note">The package appears once a route is scored.</p>';return}
+  const r=result,today=new Date().toISOString().slice(0,10);
+  const catRows=[1,2,3,4,5].map(c=>{const n=r.segs.filter(s=>s.c===c).length;return n?`<tr><td>Category ${c}</td><td>${Math.round(n/r.segs.length*100)}%</td><td>${(n/r.segs.length*r.lenM/1000).toFixed(2)} km</td></tr>`:''}).join('');
+  const haz=[
+    ['Loss of C2 link',r.ac.lostlink,'Link coverage map; lost-link behavior tested per manufacturer limits'],
+    ['Propulsion failure',`Monte Carlo footprint (${r.foot.length} samples) shows ${Math.round(r.hiFrac*100)}% of landings in Cat 4–5 ground`,r.ac.chute?'Ballistic parachute, ≤ 25 ft-lb impact energy target':'Route offset from Cat 4–5; parachute recommended'],
+    ['Fly-away',`Up to ${Math.round(r.ac.spd*10)} m of uncontrolled travel modeled`,'Geofence 150 m inside corridor edge; flight termination'],
+    ['Crewed aircraft',r.uniqAir.length?r.uniqAir.join('; '):'No heliport or approach surface within 800 m','ADS-B In, yield to all crewed traffic, ADSP strategic deconfliction'],
+    ['Obstacles',r.uniqObst.length?`${r.uniqObst.length} structures within 60 m rise to within 50 ft of planned altitude`:'None within 60 m rise to within 50 ft of planned altitude','Terrain and obstacle database check each flight; 100 ft vertical buffer'],
+    ['Weather',`Planned at ${r.w.kt} kt; failure drift scales with wind`,`Operating limit ${Math.max(15,Math.ceil(r.w.kt*1.3))} kt sustained, no flight in gusts > ${Math.max(20,Math.ceil(r.w.kt*1.6))} kt`],
+    ['Noise',`${Math.round(noiseAt(0,r.altFt,r.ac))} dB directly below; 55 dB half-width ${Math.round(Math.sqrt(Math.max(0,Math.pow(10,(r.ac.src-55)/20)**2-(r.altFt*0.3048)**2)))} m`,'Community notice to parcels within the 55 dB band; night operations avoided']
+  ].map(([h,a,m])=>`<tr><td>${h}</td><td>${a}</td><td>${m}</td></tr>`).join('');
+  $('docBody').innerHTML=`
+  <h2>Concept of Operations and Hazard Assessment</h2>
+  <p class="note">Corridor SEA-${String(Math.round(r.lenM)).padStart(5,'0')} · prepared ${today} · prototype output, not a filed document</p>
+  <h3>1. Operation</h3>
+  <p>Routine beyond-visual-line-of-sight flight of a ${r.ac.name.toLowerCase()} (MTOW ${r.ac.mtow} lb) along a fixed ${(r.lenM/1000).toFixed(2)} km corridor from the launch site in ${r.districtsCrossed[0]||'the launch district'} to the delivery site in ${r.districtsCrossed[r.districtsCrossed.length-1]||'the destination district'}, at ${r.altFt} ft AGL, cruise ${r.ac.spd} m/s, ${r.minutes.toFixed(1)} min block time. Operations window: ${ {day:'weekday daytime',rush:'weekday peak hours',night:'overnight',game:'event days'}[r.tod]}.</p>
+  <h3>2. Area of intended flight</h3>
+  <p>The corridor crosses ${r.districtsCrossed.join(', ')}. Ground population density along the centerline peaks at ${Math.round(Math.max(...r.segs.map(s=>s.d))).toLocaleString()} people/km² and averages ${Math.round(r.avgD).toLocaleString()}. The governing density category is <strong>Category ${r.maxCat}</strong>, which places the operation under the <strong>${r.maxCat<=3?'permit':'certificate'}</strong> pathway.</p>
+  <div class="tablewrap"><table><tr><th>Density category</th><th>Share of route</th><th>Length</th></tr>${catRows}</table></div>
+  <h3>3. Hazard assessment</h3>
+  <div class="tablewrap"><table><tr><th>Hazard</th><th>Analysis</th><th>Mitigation</th></tr>${haz}</table></div>
+  <h3>4. Lost-link and contingency</h3>
+  <p>On loss of command link the aircraft will ${r.ac.lostlink}. Contingency landing sites are the three lowest-density points on the route (identified from the density profile) and the launch site. Flight termination is armed throughout and bounded by a geofence 150 m inside the corridor edge.</p>
+  <h3>5. Personnel</h3>
+  <p>One operations supervisor responsible for safety and compliance; one flight coordinator per four aircraft in flight. Training records, maintenance per manufacturer instructions, and per-flight logs (date, time, duration, registration, path, personnel, landing site) are retained for 24 months.</p>
+  <h3>6. Open items before filing</h3>
+  <ul>${r.towers.length?'<li>Reroute to clear the tower conflict; this package cannot be filed as drawn.</li>':''}${r.maxCat>=4?'<li>Reroute around Category 4–5 segments or prepare a certificate-level safety case with DAA and strategic deconfliction.</li>':''}${r.uniqAir.length?'<li>Coordinate with heliport and airport operators named above; obtain a letter of agreement.</li>':''}<li>Replace modeled density, obstacle and wind layers with licensed census, FAA DOF and NOAA data.</li><li>Validate the failure-footprint model against manufacturer descent data.</li></ul>`;
+}
+$('copyDoc').onclick=()=>{const t=$('docBody').innerText;const done=()=>{const d=document.createElement('div');d.className='toast';d.textContent='Copied';document.body.appendChild(d);setTimeout(()=>d.remove(),1500)};
+  navigator.clipboard.writeText(t).then(done).catch(()=>{const s=document.createRange();s.selectNodeContents($('docBody'));getSelection().removeAllRanges();getSelection().addRange(s)})};
+const mq=matchMedia('(prefers-color-scheme: dark)');mq.addEventListener('change',draw);new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+
+// boot with the sample route so the first frame shows the tool working
+route=sample.map(p=>p.slice());finished=true;score();
+})();
+</script>

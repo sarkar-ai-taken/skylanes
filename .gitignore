@@ -1,0 +1,9 @@
+.venv/
+data/raw/
+node_modules/
+.DS_Store
+
+# private business material: stays local, never published
+founder/
+docs/
+__pycache__/

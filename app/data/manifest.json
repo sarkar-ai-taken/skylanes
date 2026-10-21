@@ -1,0 +1,46 @@
+{
+ "metro": "Seattle",
+ "bbox": [
+  -122.46,
+  47.48,
+  -122.22,
+  47.74
+ ],
+ "built": "2026-10-21",
+ "layers": {
+  "obstacles": {
+   "source": "FAA Digital Obstacle File (daily) + OpenStreetMap",
+   "count": 1331,
+   "faa_dof": 618,
+   "osm": 713
+  },
+  "powerlines": {
+   "source": "OpenStreetMap power=line (transmission; distribution lines largely unmapped)",
+   "count": 142
+  },
+  "sites": {
+   "source": "OpenStreetMap amenities + FAA ADDS airports/heliports/stadiums",
+   "count": 386
+  },
+  "facility_map": {
+   "source": "FAA UAS Facility Map (LAANC ceilings)",
+   "count": 394
+  },
+  "surface": {
+   "source": "FAA ADDS Class airspace, surface areas",
+   "count": 5
+  },
+  "op_categories": {
+   "source": "FAA ADDS Operating Categories Map",
+   "count": 10
+  },
+  "grid": {
+   "source": "US Census 2020 TIGER/Line blocks (POP20) + LEHD LODES8 WAC 2021 (C000 jobs)",
+   "count": 51660,
+   "blocks": 9790,
+   "total_residents": 872772,
+   "total_jobs": 639508,
+   "cell_m": 100
+  }
+ }
+}

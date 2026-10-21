@@ -1,0 +1,1 @@
+{"name":"corridor","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","build-data":".venv/bin/python pipeline/fetch.py && .venv/bin/python pipeline/build.py","serve":"python3 -m http.server 8080 -d app"}}

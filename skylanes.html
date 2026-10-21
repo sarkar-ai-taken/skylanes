@@ -1,0 +1,195 @@
+<title>Sky Lanes Seattle</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-bleed 3D viewport, a floating lane legend left, a journey panel right */
+:root{
+  --bg:#0c1116; --panel:rgba(18,25,32,.86); --fg:#e6ebee; --muted:#8c9aa6; --line:#2a3642;
+  --l1:#52c9a2; --l2:#6aa9ff; --l3:#f2b84b; --accent:#52c9a2; --crit:#ef6b5c;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#0c1116;--fg:#e6ebee}}
+:root[data-theme="light"]{--bg:#0c1116;--fg:#e6ebee}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:13px;overflow:hidden;
+  padding-left:max(0px,env(safe-area-inset-left,0px));padding-right:max(0px,env(safe-area-inset-right,0px))}
+#c{display:block;width:100%;height:100%;cursor:grab;touch-action:none}
+.panel{position:absolute;background:var(--panel);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:6px;padding:12px 14px;max-width:calc(100vw - 32px)}
+.tl{top:14px;left:max(14px,env(safe-area-inset-left,0px))}
+.tr{top:14px;right:max(14px,env(safe-area-inset-right,0px));width:300px}
+.bl{bottom:14px;left:max(14px,env(safe-area-inset-left,0px));display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+@media(max-width:760px){.tr{top:auto;bottom:64px;right:max(14px,env(safe-area-inset-right,0px));left:max(14px,env(safe-area-inset-left,0px));width:auto}}
+h1{font-size:15px;margin:0 0 2px;font-weight:600}
+.eyebrow{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.lanes{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.lane{display:grid;grid-template-columns:14px 1fr auto;gap:8px;align-items:center;cursor:pointer}
+.lane i{width:14px;height:14px;border-radius:3px;display:block}
+.lane b{font-weight:500}
+.lane small{display:block;color:var(--muted);font-family:var(--mono);font-size:10.5px}
+.lane .n{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--muted)}
+.lane.off{opacity:.4}
+.rule{font-size:11.5px;color:var(--muted);margin-top:10px;line-height:1.4;max-width:260px}
+button,select{font:inherit;font-size:12.5px;padding:6px 10px;border-radius:4px;border:1px solid var(--line);background:var(--panel);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);color:#0c1116;border-color:var(--accent);font-weight:500}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.kv{display:grid;grid-template-columns:1fr auto;gap:3px 12px;margin-top:8px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.steps{list-style:none;padding:0;margin:8px 0 0;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.steps li{display:grid;grid-template-columns:8px 1fr auto;gap:8px;align-items:baseline}
+.steps li i{width:8px;height:8px;border-radius:50%;display:inline-block;position:relative;top:-1px}
+.steps li span:last-child{font-family:var(--mono);color:var(--muted);font-variant-numeric:tabular-nums}
+.hint{font-size:11px;color:var(--muted)}
+</style>
+
+<canvas id="c" aria-label="3D view of stacked flying lanes over Seattle"></canvas>
+
+<div class="panel tl">
+  <div class="eyebrow">Sky Lanes · Seattle · stacked corridor model</div>
+  <h1>Three tiers, one grid</h1>
+  <div class="lanes" id="lanes"></div>
+  <div class="rule" id="rule"></div>
+</div>
+
+<div class="panel tr">
+  <div class="eyebrow">Journey</div>
+  <select id="trip" aria-label="Trip" style="width:100%;margin-top:6px"></select>
+  <dl class="kv" id="tripKv"></dl>
+  <ul class="steps" id="steps"></ul>
+  <div class="hint" style="margin-top:8px">The camera follows the trip. Drag to orbit, scroll to zoom, double-click to release.</div>
+</div>
+
+<div class="panel bl">
+  <button class="primary" id="go">Fly the trip</button>
+  <button id="reset">Overview</button>
+  <select id="density" aria-label="Traffic"><option value="0.5">Light traffic</option><option value="1" selected>2035 traffic</option><option value="2">Peak 2040</option></select>
+  <span class="hint" id="stat"></span>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+const T=THREE;
+// ---------- Lane definitions (ft AGL). Each tier has two opposing sub-lanes separated vertically, like the hemispheric rule. ----------
+const TIERS=[
+  {id:1,name:'Drone lane',alt:[200,400],color:0x52c9a2,who:'Delivery and inspection drones',speed:18,rule:'Eastbound at 250 ft, westbound at 350 ft. Yields to everything above.'},
+  {id:2,name:'Air-taxi lane',alt:[700,1100],color:0x6aa9ff,who:'eVTOL air taxis, 4 seats',speed:55,rule:'Eastbound 800 ft, westbound 1000 ft. Enters and leaves only at vertiport ramps.'},
+  {id:3,name:'Personal flight lane',alt:[1500,2100],color:0xf2b84b,who:'Personal flying vehicles, intercity',speed:85,rule:'Eastbound 1600 ft, westbound 2000 ft. Above the city noise floor; descends through tier 2 ramps only.'}
+];
+const FT=0.02; // world units per ft (vertical exaggeration x2 relative to ground scale below)
+const GU=0.004; // world units per metre on the ground  (city ~ 9 km → 36 units)
+
+// ---------- Ground: synthesized Seattle blocks on a 24×18 grid ----------
+let seed=11;const rnd=()=>{seed=(seed*16807)%2147483647;return (seed-1)/2147483646};
+const districts=[{n:'Downtown',x:-6,z:8,r:5,h:180},{n:'SLU',x:-1,z:4,r:3.5,h:110},{n:'Capitol Hill',x:6,z:6,r:5,h:40},{n:'Queen Anne',x:-8,z:-1,r:5,h:30},{n:'Fremont',x:-3,z:-7,r:4,h:30},{n:'Ballard',x:-11,z:-10,r:5,h:25},{n:'U District',x:9,z:-9,r:5,h:60},{n:'Central District',x:10,z:12,r:4,h:28},{n:'Magnolia',x:-15,z:0,r:4,h:18}];
+const water=[{x:1,z:-2,rx:3.6,rz:4.5},{x:-20,z:4,rx:4,rz:16},{x:20,z:0,rx:3,rz:16},{x:7,z:-4,rx:5,rz:1.2}]; // Lake Union, Sound, Lake WA, Portage
+const inWater=(x,z)=>water.some(w=>((x-w.x)/w.rx)**2+((z-w.z)/w.rz)**2<1);
+const vertiports=[{n:'Ballard',x:-11,z:-10},{n:'Fremont',x:-3,z:-7},{n:'Downtown',x:-6,z:8},{n:'SLU',x:-1,z:4},{n:'Capitol Hill',x:6,z:6},{n:'U District',x:9,z:-9},{n:'Central',x:10,z:12}];
+
+const scene=new T.Scene();scene.background=new T.Color(0x0c1116);scene.fog=new T.Fog(0x0c1116,60,140);
+const cv=document.getElementById('c');const ren=new T.WebGLRenderer({canvas:cv,antialias:true});ren.setPixelRatio(Math.min(2,devicePixelRatio));
+const cam=new T.PerspectiveCamera(50,1,0.1,400);
+scene.add(new T.HemisphereLight(0x9fb4c8,0x1a1f24,0.9));const sun=new T.DirectionalLight(0xffe9c4,0.9);sun.position.set(30,60,-20);scene.add(sun);
+
+// ground
+const g=new T.Mesh(new T.PlaneGeometry(60,44),new T.MeshLambertMaterial({color:0x1c2429}));g.rotation.x=-Math.PI/2;scene.add(g);
+water.forEach(w=>{const m=new T.Mesh(new T.CircleGeometry(1,48),new T.MeshLambertMaterial({color:0x1b3340}));m.scale.set(w.rx,w.rz,1);m.rotation.x=-Math.PI/2;m.position.set(w.x,0.02,w.z);scene.add(m)});
+// roads
+const roadMat=new T.LineBasicMaterial({color:0x33414a});
+for(let x=-28;x<=28;x+=2){scene.add(new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(x,0.03,-22),new T.Vector3(x,0.03,22)]),roadMat))}
+for(let z=-22;z<=22;z+=2){scene.add(new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(-28,0.03,z),new T.Vector3(28,0.03,z)]),roadMat))}
+// buildings (instanced)
+const bGeo=new T.BoxGeometry(1,1,1);bGeo.translate(0,0.5,0);
+const bMat=new T.MeshLambertMaterial({color:0x3a4a55});
+const boxes=[];
+for(let x=-27;x<=27;x+=2)for(let z=-21;z<=21;z+=2){for(let k=0;k<3;k++){const px=x+(rnd()-0.5)*1.6,pz=z+(rnd()-0.5)*1.6;if(inWater(px,pz))continue;let h=6;for(const d of districts){const t=Math.hypot(px-d.x,pz-d.z)/d.r;if(t<1.2)h=Math.max(h,d.h*(1-t*t*0.7)*(0.5+rnd()))}if(rnd()>0.7)continue;boxes.push([px,pz,0.35+rnd()*0.35,h*0.3048*FT*0.5])}}
+const bm=new T.InstancedMesh(bGeo,bMat,boxes.length);const mat4=new T.Matrix4();boxes.forEach((b,i)=>{mat4.compose(new T.Vector3(b[0],0,b[1]),new T.Quaternion(),new T.Vector3(b[2],b[3],b[2]));bm.setMatrixAt(i,mat4)});scene.add(bm);
+// landmarks
+[[ -7.5,2.5,184,'Space Needle'],[-5.5,9.5,284,'Columbia Center']].forEach(([x,z,h])=>{const m=new T.Mesh(new T.CylinderGeometry(0.12,0.2,h*0.3048*FT*0.5,8),new T.MeshLambertMaterial({color:0x8fa3b0}));m.position.set(x,h*0.3048*FT*0.25,z);scene.add(m)});
+
+// ---------- Lane network: a grid of corridors per tier, drawn as translucent ribbons ----------
+const laneGroups={};const laneLines={};
+const laneXs=[-14,-7,0,7,14],laneZs=[-14,-7,0,7,14];
+function ribbon(points,alt,color,w){const geo=new T.BufferGeometry();const v=[],idx=[];for(let i=0;i<points.length;i++){const p=points[i],q=points[Math.min(points.length-1,i+1)],r=points[Math.max(0,i-1)];const dx=q.x-r.x,dz=q.z-r.z,L=Math.hypot(dx,dz)||1;const nx=-dz/L*w,nz=dx/L*w;v.push(p.x+nx,alt,p.z+nz,p.x-nx,alt,p.z-nz);if(i<points.length-1)idx.push(i*2,i*2+1,i*2+2,i*2+1,i*2+3,i*2+2)}geo.setAttribute('position',new T.Float32BufferAttribute(v,3));geo.setIndex(idx);geo.computeVertexNormals();return new T.Mesh(geo,new T.MeshBasicMaterial({color,transparent:true,opacity:0.16,side:T.DoubleSide,depthWrite:false}))}
+TIERS.forEach(t=>{const grp=new T.Group();laneGroups[t.id]=grp;scene.add(grp);const alts=[t.alt[0]+50,t.alt[1]-100].map(a=>a*FT);const w=0.35+t.id*0.1;
+  laneXs.forEach(x=>alts.forEach(a=>grp.add(ribbon([new T.Vector3(x,0,-21),new T.Vector3(x,0,21)],a,t.color,w))));
+  laneZs.forEach(z=>alts.forEach(a=>grp.add(ribbon([new T.Vector3(-27,0,z),new T.Vector3(27,0,z)],a,t.color,w))));
+  // edge lines for legibility
+  const lm=new T.LineBasicMaterial({color:t.color,transparent:true,opacity:0.35});
+  laneXs.forEach(x=>alts.forEach(a=>grp.add(new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(x,a,-21),new T.Vector3(x,a,21)]),lm))));
+  laneZs.forEach(z=>alts.forEach(a=>grp.add(new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(-27,a,z),new T.Vector3(27,a,z)]),lm))));
+});
+// vertiports and vertical ramps (helical columns through the tiers)
+vertiports.forEach(v=>{const pad=new T.Mesh(new T.CylinderGeometry(0.8,0.8,0.08,24),new T.MeshLambertMaterial({color:0x6aa9ff}));pad.position.set(v.x,0.06,v.z);scene.add(pad);
+  const pts=[];for(let i=0;i<=80;i++){const t=i/80;const a=t*TIERS[2].alt[1]*FT;pts.push(new T.Vector3(v.x+Math.cos(t*Math.PI*6)*0.6,a,v.z+Math.sin(t*Math.PI*6)*0.6))}
+  scene.add(new T.Line(new T.BufferGeometry().setFromPoints(pts),new T.LineBasicMaterial({color:0xaab7c4,transparent:true,opacity:0.5})));
+  const col=new T.Mesh(new T.CylinderGeometry(0.7,0.7,TIERS[2].alt[1]*FT,16,1,true),new T.MeshBasicMaterial({color:0xaab7c4,transparent:true,opacity:0.05,side:T.DoubleSide,depthWrite:false}));col.position.set(v.x,TIERS[2].alt[1]*FT/2,v.z);scene.add(col)});
+
+// ---------- Traffic ----------
+const vehGeo={1:new T.SphereGeometry(0.09,6,6),2:new T.ConeGeometry(0.16,0.4,6),3:new T.ConeGeometry(0.22,0.6,6)};
+vehGeo[2].rotateX(Math.PI/2);vehGeo[3].rotateX(Math.PI/2);
+const vehMat={};TIERS.forEach(t=>vehMat[t.id]=new T.MeshLambertMaterial({color:t.color,emissive:t.color,emissiveIntensity:0.5}));
+let vehicles=[];const trafficGroup=new T.Group();scene.add(trafficGroup);
+function spawn(mult){trafficGroup.clear();vehicles=[];const counts={1:110,2:40,3:18};TIERS.forEach(t=>{const n=Math.round(counts[t.id]*mult);for(let i=0;i<n;i++){const alongX=rnd()<0.5;const dir=rnd()<0.5?1:-1;const fixed=(alongX?laneZs:laneXs)[Math.floor(rnd()*5)];const alt=(dir>0?t.alt[0]+50:t.alt[1]-100)*FT;const m=new T.Mesh(vehGeo[t.id],vehMat[t.id]);trafficGroup.add(m);vehicles.push({m,t,alongX,dir,fixed,alt,pos:(rnd()-0.5)*42,spd:t.speed*GU*(0.9+rnd()*0.2)})}})}
+spawn(1);
+function stepTraffic(dt){for(const v of vehicles){v.pos+=v.dir*v.spd*dt*4;if(v.pos>22)v.pos=-22;if(v.pos<-22)v.pos=22;if(v.alongX){v.m.position.set(v.pos,v.alt,v.fixed);v.m.rotation.y=v.dir>0?Math.PI/2:-Math.PI/2}else{v.m.position.set(v.fixed,v.alt,v.pos);v.m.rotation.y=v.dir>0?0:Math.PI}}}
+
+// ---------- Trips: climb at origin vertiport, cruise in the tier, descend at destination ----------
+const TRIPS=[
+  {name:'Ballard → Capitol Hill, air taxi',from:0,to:4,tier:2,via:[[-7,-7],[-7,7],[7,7]]},
+  {name:'Downtown → U District, air taxi',from:2,to:5,tier:2,via:[[-7,7],[-7,-7],[7,-7]]},
+  {name:'Fremont → Central District, drone delivery',from:1,to:6,tier:1,via:[[0,-7],[0,14],[7,14]]},
+  {name:'Downtown → U District, personal flight',from:2,to:5,tier:3,via:[[-7,7],[-7,-7],[7,-7]]}
+];
+const tripSel=document.getElementById('trip');TRIPS.forEach((t,i)=>tripSel.add(new Option(t.name,i)));
+let tripPath=null,tripLine=null,tripVeh=null,tripT=0,flying=false,follow=false;
+function buildTrip(i){const tr=TRIPS[i],tier=TIERS[tr.tier-1],o=vertiports[tr.from],d=vertiports[tr.to];
+  const cruise=(tier.alt[0]+50)*FT;const pts=[];
+  // climb helix
+  for(let k=0;k<=30;k++){const t=k/30;pts.push(new T.Vector3(o.x+Math.cos(t*Math.PI*4)*0.6,t*cruise,o.z+Math.sin(t*Math.PI*4)*0.6))}
+  const wp=[[o.x,o.z],...tr.via,[d.x,d.z]];
+  for(let k=1;k<wp.length;k++){const a=wp[k-1],b=wp[k];for(let s=1;s<=20;s++){const t=s/20;pts.push(new T.Vector3(a[0]+(b[0]-a[0])*t,cruise,a[1]+(b[1]-a[1])*t))}}
+  for(let k=1;k<=30;k++){const t=k/30;pts.push(new T.Vector3(d.x+Math.cos(t*Math.PI*4)*0.6,cruise*(1-t),d.z+Math.sin(t*Math.PI*4)*0.6))}
+  tripPath=new T.CatmullRomCurve3(pts,false,'catmullrom',0.1);
+  if(tripLine)scene.remove(tripLine);
+  tripLine=new T.Mesh(new T.TubeGeometry(tripPath,400,0.08,6,false),new T.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.7}));scene.add(tripLine);
+  if(tripVeh)scene.remove(tripVeh);tripVeh=new T.Mesh(vehGeo[tier.id],new T.MeshLambertMaterial({color:0xffffff,emissive:0xffffff,emissiveIntensity:0.6}));tripVeh.scale.setScalar(1.4);scene.add(tripVeh);tripT=0;flying=false;follow=false;
+  // panel
+  let len=0;for(let k=1;k<wp.length;k++)len+=Math.hypot(wp[k][0]-wp[k-1][0],wp[k][1]-wp[k-1][1]);const km=len/GU/1000;
+  const climbMin=tier.alt[0]/500,cruiseMin=km*1000/tier.speed/60,tot=climbMin*2+cruiseMin;
+  const kv=document.getElementById('tripKv');kv.innerHTML=[['Tier',`${tier.id} · ${tier.name}`],['Cruise',`${tier.alt[0]+50} ft AGL`],['Distance',`${km.toFixed(1)} km`],['Block time',`${tot.toFixed(1)} min`],['Driving today',`${Math.round(km*3.2+6)} min`]].map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join('');
+  const col='#'+tier.color.toString(16).padStart(6,'0');
+  document.getElementById('steps').innerHTML=[[`Lift from ${o.n} vertiport, helical climb`,`${climbMin.toFixed(1)} min`],[`Join tier ${tier.id} ${tier.id===1?'drone':'eastbound'} lane`,''],[`Cruise ${wp.length-2} corridor segments at ${tier.speed} m/s`,`${cruiseMin.toFixed(1)} min`],[`Descend through ramp at ${d.n}`,`${climbMin.toFixed(1)} min`]].map(([a,b])=>`<li><i style="background:${col}"></i><span>${a}</span><span>${b}</span></li>`).join('');
+}
+tripSel.onchange=()=>buildTrip(+tripSel.value);buildTrip(0);
+document.getElementById('go').onclick=()=>{tripT=0;flying=true;follow=true};
+document.getElementById('reset').onclick=()=>{follow=false;flying=false;orbit.theta=0.7;orbit.phi=1.0;orbit.r=48;orbit.target.set(0,8,0)};
+document.getElementById('density').onchange=e=>{seed=11;spawn(+e.target.value)};
+
+// ---------- Legend ----------
+const laneEl=document.getElementById('lanes');const vis={1:true,2:true,3:true};
+function legend(){laneEl.innerHTML=TIERS.map(t=>`<div class="lane ${vis[t.id]?'':'off'}" data-id="${t.id}" role="button" tabindex="0"><i style="background:#${t.color.toString(16).padStart(6,'0')}"></i><div><b>${t.name}</b><small>${t.alt[0]}–${t.alt[1]} ft · ${t.who}</small></div><span class="n">${vehicles.filter(v=>v.t.id===t.id).length}</span></div>`).join('');
+  laneEl.querySelectorAll('.lane').forEach(el=>{const h=()=>{const id=+el.dataset.id;vis[id]=!vis[id];laneGroups[id].visible=vis[id];vehicles.forEach(v=>{if(v.t.id===id)v.m.visible=vis[id]});legend()};el.onclick=h;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();h()}}})}
+laneEl.addEventListener('mouseover',e=>{const el=e.target.closest('.lane');if(el)document.getElementById('rule').textContent=TIERS[+el.dataset.id-1].rule});
+document.getElementById('rule').textContent='Tiers are separated by 300 ft minimum. Vehicles change tier only inside a vertiport ramp column. Hover a tier for its rule.';
+
+// ---------- Camera: minimal orbit ----------
+const orbit={theta:0.7,phi:1.0,r:48,target:new T.Vector3(0,8,0)};let drag=null;
+cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};cv.setPointerCapture(e.pointerId);cv.style.cursor='grabbing'});
+cv.addEventListener('pointermove',e=>{if(!drag)return;follow=false;orbit.theta-=(e.clientX-drag.x)*0.005;orbit.phi=Math.max(0.15,Math.min(1.45,orbit.phi-(e.clientY-drag.y)*0.005));drag={x:e.clientX,y:e.clientY}});
+cv.addEventListener('pointerup',()=>{drag=null;cv.style.cursor='grab'});
+cv.addEventListener('wheel',e=>{e.preventDefault();orbit.r=Math.max(8,Math.min(120,orbit.r*(1+e.deltaY*0.001)))},{passive:false});
+cv.addEventListener('dblclick',()=>{follow=false});
+
+function resize(){const w=cv.clientWidth,h=cv.clientHeight;if(cv.width!==w*ren.getPixelRatio()||cv.height!==h*ren.getPixelRatio()){ren.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}}
+let last=performance.now();const stat=document.getElementById('stat');
+function frame(now){const dt=Math.min(0.05,(now-last)/1000);last=now;resize();stepTraffic(dt);
+  if(tripPath&&flying){tripT+=dt/40;if(tripT>=1){tripT=1;flying=false}const p=tripPath.getPointAt(tripT),q=tripPath.getPointAt(Math.min(1,tripT+0.005));tripVeh.position.copy(p);tripVeh.lookAt(q);
+    if(follow){orbit.target.lerp(p,0.08);orbit.r+= (14-orbit.r)*0.03}}
+  else if(tripPath&&!flying&&tripVeh){tripVeh.position.copy(tripPath.getPointAt(tripT))}
+  cam.position.set(orbit.target.x+orbit.r*Math.sin(orbit.phi)*Math.sin(orbit.theta),orbit.target.y+orbit.r*Math.cos(orbit.phi),orbit.target.z+orbit.r*Math.sin(orbit.phi)*Math.cos(orbit.theta));cam.lookAt(orbit.target);
+  ren.render(scene,cam);stat.textContent=`${vehicles.length} vehicles airborne · ${vertiports.length} vertiports · lanes on a 1.75 km grid`;requestAnimationFrame(frame)}
+legend();requestAnimationFrame(frame);
+})();
+</script>
