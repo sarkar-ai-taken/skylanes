@@ -2,6 +2,7 @@
 import { AIRCRAFT, WIND_PRESETS, TOD, FT, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density } from './engine.js';
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
+import { createScene } from './scene3d.js';
 
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -24,9 +25,9 @@ const state = { route: [], finished: false, result: null };
 // ---------- Map ----------
 const [W, S, E, N] = M.bbox;
 const map = new maplibregl.Map({
-  container: 'map', style: `https://tiles.openfreemap.org/styles/${dark() ? 'dark' : 'positron'}`,
+  container: 'map', style: 'https://tiles.openfreemap.org/styles/dark', // the 3D sky reads best on a dark map in either page theme
   bounds: [[-122.42, 47.59], [-122.30, 47.69]], maxBounds: [[W - 0.05, S - 0.03], [E + 0.05, N + 0.03]],
-  pitch: 45, maxPitch: 70, doubleClickZoom: false, attributionControl: { compact: true },
+  pitch: 60, bearing: -20, maxPitch: 75, doubleClickZoom: false, attributionControl: { compact: true },
 });
 window.corridorMap = map; // handle for debugging and tests
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
@@ -66,7 +67,7 @@ map.on('load', () => {
   map.addLayer({ id: 'laanc-label', type: 'symbol', source: 'laanc', minzoom: 12, layout: { 'text-field': ['to-string', ['get', 'ceiling_ft']], 'text-size': 10, 'text-font': ['Noto Sans Regular'] }, paint: { 'text-color': css('--muted'), 'text-opacity': 0.8 } });
   // 3D buildings from the basemap's OpenMapTiles source
   map.addLayer({ id: 'bld3d', type: 'fill-extrusion', source: 'openmaptiles', 'source-layer': 'building', minzoom: 13,
-    paint: { 'fill-extrusion-color': dark() ? '#39423f' : '#cfd3cc', 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 6], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.8 } });
+    paint: { 'fill-extrusion-color': ['interpolate', ['linear'], ['coalesce', ['get', 'render_height'], 6], 0, '#1f272c', 60, '#34414a', 200, '#4a5d6a'], 'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 6], 'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0], 'fill-extrusion-opacity': 0.9 } });
   map.addSource('power', { type: 'geojson', data: raw.powerlines });
   map.addLayer({ id: 'power', type: 'line', source: 'power', paint: { 'line-color': '#8a5cc2', 'line-width': 1.5, 'line-dasharray': [3, 2] } });
   map.addSource('obstacles', { type: 'geojson', data: fc(raw.obstacles.map(o => pt([o.lon, o.lat], o))) });
@@ -88,6 +89,8 @@ map.on('load', () => {
     map.on('mouseleave', id, () => (map.getCanvas().style.cursor = ''));
   }
   $('loading').remove();
+  scene = createScene(map, D, raw);
+  setView('3d');
   if (!loadHash()) loadSample('magnolia');
 });
 
@@ -153,9 +156,24 @@ $('wind').addEventListener('change', async () => {
 });
 const wind = () => ($('wind').value === 'live' && liveWind) || WIND_PRESETS[$('wind').value] || WIND_PRESETS.typical;
 
-document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('change', () => {
-  for (const id of LAYERS[cb.dataset.layer]) map.getLayer(id) && map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
-}));
+const applyLayer = cb => { for (const id of LAYERS[cb.dataset.layer]) map.getLayer(id) && map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none'); };
+document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('change', () => applyLayer(cb)));
+
+// ---------- 3D sky / plan view ----------
+// 3D draws the route, lane, footprints and airspace volumes with deck.gl; plan view uses the flat MapLibre layers and the layer toggles.
+let scene = null, view = '3d';
+const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg'];
+function setView(v) {
+  view = v;
+  document.body.dataset.view = v;
+  $('view').textContent = v === '3d' ? 'Plan view' : '3D sky';
+  if (v === '3d') for (const id of FLAT) map.setLayoutProperty(id, 'visibility', 'none');
+  else document.querySelectorAll('[data-layer]').forEach(applyLayer);
+  map.setPaintProperty('density', 'raster-opacity', v === '3d' ? 0.12 : 0.75);
+  scene.setVisible(v === '3d');
+  map.easeTo(v === '3d' ? { pitch: 60, bearing: -20, duration: 800 } : { pitch: 0, bearing: 0, duration: 800 });
+}
+$('view').onclick = () => scene && setView(view === '3d' ? 'plan' : '3d');
 
 // ---------- Scoring → map + rail + doc ----------
 let lastTod = 'day';
@@ -171,6 +189,7 @@ function drawMap() {
   if (!map.getSource('wps')) return;
   const r = state.result;
   map.getSource('wps').setData(fc(state.route.map((c, i) => pt(c, { i }))));
+  scene?.update(r, state.route);
   if (!r) { for (const id of ['area', 'noise', 'foot', 'routeSeg']) map.getSource(id).setData(fc([])); return; }
   const segs = [];
   for (let i = 0; i < r.samples.length - 1; i++) segs.push({ type: 'Feature', properties: { c: r.samples[i].c }, geometry: { type: 'LineString', coordinates: [r.samples[i].ll, r.samples[i + 1].ll] } });

@@ -66,6 +66,8 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outlin
 .legend{position:absolute;bottom:28px;left:10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:11px;font-family:var(--mono);display:flex;gap:10px;flex-wrap:wrap;z-index:2;max-width:calc(100% - 20px)}
 .legend span{display:flex;align-items:center;gap:4px}.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
 .credits{margin-top:16px;max-width:110ch}.credits a{color:inherit}
+body[data-view="3d"] .layers,body[data-view="3d"] .legendplan,body:not([data-view="3d"]) .legend3d{display:none}
+.legend3d{background:rgba(18,25,32,.86);color:#e6ebee;border-color:#2a3642}
 .toast{position:fixed;bottom:16px;right:16px;background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:4px;font-size:13px;z-index:10}
 .maplibregl-popup-content{background:var(--panel);color:var(--fg);font-family:var(--font);font-size:12px}
 .loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--panel);z-index:3;color:var(--muted)}
@@ -84,7 +86,11 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outlin
       <div id="map" role="application" aria-label="Seattle route map"></div>
       <div class="loading" id="loading">Loading census, FAA and OSM layers…</div>
       <div class="hint" id="hint">Click to place waypoints. Double-click to finish.</div>
-      <div class="legend">
+      <div class="legend legend3d">
+        <span><i style="background:#52c9a2;opacity:.6"></i>Open to 400 ft</span><span><i style="background:#f2b84b;opacity:.7"></i>Low ceiling</span><span><i style="background:#ef6b5c"></i>No auto-approval / Cat 5</span>
+        <span><i style="background:#e6ebee;width:3px"></i>Obstacle</span><span><i style="background:#52c9a2"></i>Lane</span><span><i style="background:#ef6b5c;opacity:.5;border-radius:50%"></i>Failure landing</span>
+      </div>
+      <div class="legend legendplan">
         <span><i class="c2"></i>Cat 2</span><span><i class="c3"></i>Cat 3</span><span><i class="c4"></i>Cat 4</span><span><i class="c5"></i>Cat 5</span>
         <span><i style="background:var(--accent)"></i>Noise ≥ 55 dB</span><span><i style="background:var(--crit);opacity:.5;border-radius:50%"></i>Failure landing</span>
       </div>
@@ -95,6 +101,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outlin
       <select id="alt" aria-label="Altitude"><option value="150">150 ft AGL</option><option value="200">200 ft AGL</option><option value="250">250 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="400">400 ft AGL</option></select>
       <select id="wind" aria-label="Wind"><option value="calm">Wind 5 kt S</option><option value="typical" selected>Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="live">Wind: live at KBFI</option></select>
       <select id="tod" aria-label="Time of day"><option value="day" selected>Weekday daytime</option><option value="night">Overnight</option><option value="event">Stadium event day</option></select>
+      <button id="view">Plan view</button>
       <button id="undo">Undo point</button>
       <button id="clear">Clear</button>
       <button class="primary" id="share">Copy share link</button>
@@ -142,6 +149,7 @@ button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outlin
 </footer>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
 <script type="module" src="ui.js"></script>
 </body>
 </html>

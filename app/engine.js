@@ -151,7 +151,7 @@ export const DEFAULTS = { failRatePerFh: 1e-4, sampleM: 25, footEveryM: 100, foo
 export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', ...opt } = {}) {
   const o = { ...DEFAULTS, ...opt }, ac = typeof aircraft === 'string' ? AIRCRAFT[aircraft] : aircraft;
   const pts = route.map(D.proj), rnd = rng(99);
-  const samples = [], foot = [], obst = new Map(), lines = new Map(), air = new Map(), noise = { hospital: 0, school: 0 };
+  const samples = [], foot = [], footFrom = [], obst = new Map(), lines = new Map(), air = new Map(), noise = { hospital: 0, school: 0 };
   let lenM = 0, nextFoot = 0, overSum = 0, hi = 0, waterLandings = 0;
   const near = new Map();
   for (let i = 0; i < pts.length - 1; i++) {
@@ -175,7 +175,7 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
       if (along >= nextFoot) {
         nextFoot += o.footEveryM;
         for (const p of footprint(xy, altFt, ac, wind, o.footN, rnd)) {
-          const pd = density(D, p, tod); foot.push(p); overSum += pd;
+          const pd = density(D, p, tod); foot.push(p); footFrom.push(xy); overSum += pd;
           if (pd >= o.denseKm2) hi++;
           if (isWater(D, p)) waterLandings++;
         }
@@ -194,7 +194,7 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   const laanc = samples.filter(s => s.ceiling != null);
   const overCeiling = laanc.filter(s => altFt > s.ceiling);
   return {
-    ac, altFt, wind, tod, opt: o, samples, foot, lenM, minutes: hours * 60, maxCat,
+    ac, altFt, wind, tod, opt: o, samples, foot, footFrom, lenM, minutes: hours * 60, maxCat,
     meanD: samples.reduce((a, s) => a + s.d, 0) / samples.length, peakD: Math.max(...samples.map(s => s.d)),
     faaShare: samples.filter(s => s.faa).length / samples.length,
     hiFrac: foot.length ? hi / foot.length : 0, waterFrac: foot.length ? waterLandings / foot.length : 0, meanUnder, ecPerFh, ecPerFlight: ecPerFh * hours,
