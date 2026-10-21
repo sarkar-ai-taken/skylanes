@@ -61,3 +61,9 @@ published under `/prototypes/` on the site.
 
 US Census Bureau (2020 TIGER/Line blocks, LEHD LODES), FAA (Digital Obstacle File, UAS Facility Maps, ADDS),
 National Weather Service, © OpenStreetMap contributors (ODbL), OpenFreeMap / OpenMapTiles.
+
+## License
+
+Code: [MIT](LICENSE). The data in `app/data/` keeps its sources' terms: US government data (Census, FAA, NWS) is
+public domain; OpenStreetMap-derived layers are © OpenStreetMap contributors under the
+[ODbL](https://www.openstreetmap.org/copyright), which requires attribution and share-alike for derived databases.
