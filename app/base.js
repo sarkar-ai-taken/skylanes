@@ -22,8 +22,8 @@ export function createMap(container, opts = {}) {
   }));
 }
 
-/** Header links between the three pages. */
+/** Header links between the pages. */
 export function nav(active) {
-  const pages = [['index.html', 'Plan a route'], ['ride.html', 'Ride'], ['fleet.html', 'Fleet']];
+  const pages = [['index.html', 'Plan a route'], ['ride.html', 'Ride'], ['fleet.html', 'Fleet'], ['address.html', 'My address']];
   return `<nav class="pages">${pages.map(([h, t]) => `<a href="${h}"${h.startsWith(active) ? ' aria-current="page"' : ''}>${t}</a>`).join('')}</nav>`;
 }

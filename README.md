@@ -24,7 +24,7 @@ MLB, NFL and NCAA football home games (MLB statsapi, ESPN) that switch on the FA
 windows; and active Washington TFRs from tfr.faa.gov. That site blocks browser requests, so the Pages workflow
 fetches it hourly (`pipeline/tfr.mjs`) and ships `data/tfr.json` with the site.
 
-**Live:** https://sarkar-ai-taken.github.io/skylanes/ (planner) · [/ride.html](https://sarkar-ai-taken.github.io/skylanes/ride.html) (fly an air taxi) · [/fleet.html](https://sarkar-ai-taken.github.io/skylanes/fleet.html) (warehouse fleet simulation) · no sign-up, no API keys, runs entirely in the browser.
+**Live:** https://sarkar-ai-taken.github.io/skylanes/ (planner) · [/ride.html](https://sarkar-ai-taken.github.io/skylanes/ride.html) (fly an air taxi) · [/fleet.html](https://sarkar-ai-taken.github.io/skylanes/fleet.html) (warehouse fleet simulation) · [/address.html](https://sarkar-ai-taken.github.io/skylanes/address.html) (is my home under a lane?) · no sign-up, no API keys, runs entirely in the browser.
 Every analysis is a shareable link (the route and settings live in the URL).
 
 > Prototype for planning and discussion. Not an FAA product and not a filed document.
@@ -39,7 +39,7 @@ Set up the pipeline once: `python3 -m venv .venv && .venv/bin/pip install shapel
 A first `build-data` downloads about 12 GB (mostly ADS-B and lidar) into `data/raw/` and takes about an hour on a
 home connection; reruns reuse it. `fetch.py --force --only <name>,<name>` refetches single sources.
 
-## Three pages
+## Four pages
 
 - **Plan a route** (`index.html`): the safety-case planner above.
 - **Ride** (`ride.html`): pick two concept vertiports and fly an air taxi on the 800 / 1,000 ft lanes, with chase, cabin
@@ -52,6 +52,10 @@ home connection; reruns reuse it. `fetch.py --force --only <name>,<name>` refetc
   census-weighted homes; each is checked by the engine (range, Category 5 drop, airspace approval, buildings, stadium
   TFRs) and either dispatched, rerouted, flown lower or refused with a reason. Playback in 3D with KPIs and charts
   (`app/fleet-sim.js`, deterministic, tested).
+- **My address** (`address.html`): type an address (geocoded by OpenStreetMap Nominatim; map tiles for
+  the area load from OpenFreeMap; the lane check runs in the browser), click the map or use your location, and get a plain answer: is a drone, air-taxi or personal-flight lane
+  overhead (centreline within 40 m), nearby (inside the tier's 55 dB band, at least 150 m) or clear, with distance,
+  direction, lane status and expected noise (`lanesNear` in `app/engine.js`, tested).
 
 Each page has an "Expand beyond Seattle" sign-up box. It stays closed until `app/config.js` names an endpoint
 (Formspree or a Google Form).

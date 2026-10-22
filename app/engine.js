@@ -42,7 +42,8 @@ function decode(b64, Type) {
   return Type === Uint8Array ? bytes : new Type(bytes.buffer);
 }
 
-export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest, buildings = [], traffic = null, wind = null }) {
+// Only manifest is required; a page that needs just lanes and traffic can leave the other layers out.
+export function prepare({ grid = { tiles: [] }, obstacles = [], powerlines = { features: [] }, sites = [], airspace = {}, manifest, buildings = [], traffic = null, wind = null }) {
   const [W, S, E, N] = manifest.bbox;
   const lat0 = (S + N) / 2, lon0 = (W + E) / 2;
   const mLon = 111320 * Math.cos(lat0 * Math.PI / 180), mLat = 110574;
@@ -57,9 +58,9 @@ export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest
     buildings: buildings.map(b => { const ring = b.ring.map(proj); return { ...b, xy: ring, bbox: bboxOf([[ring]]) }; }),
     powerlines: powerlines.features.map(f => ({ props: f.properties, xy: f.geometry.coordinates.map(proj) })),
     sites: sites.map(s => ({ ...s, xy: proj([s.lon, s.lat]) })),
-    facility: polys(airspace.facility_map),
-    surface: polys(airspace.surface_areas),
-    opcats: polys(airspace.operating_categories),
+    facility: polys(airspace.facility_map || []),
+    surface: polys(airspace.surface_areas || []),
+    opcats: polys(airspace.operating_categories || []),
     classB: polys(airspace.class_b || []),
     traffic: traffic && { ...traffic, density: traffic.density.map(b => decode(b, Float32Array)), rotor: traffic.rotor.map(b => decode(b, Float32Array)) },
     wind: wind && { ...wind, xy: wind.points.map(proj) },
@@ -742,6 +743,73 @@ export function laneStats(lanes, D) {
   const km = TIERS.map(() => LANE_STATUS.map(() => 0));
   for (const ln of lanes) { let m = 0; for (let i = 0; i < ln.p.length - 1; i++) m += hyp(D.proj(ln.p[i]), D.proj(ln.p[i + 1])); km[ln.t][ln.s] += m / 1000; }
   return km;
+}
+
+// ---------- Lanes near a point ("is my home under a lane?") ----------
+export const LANE_HALF = 40; // m: a lane is 80 m wide around its centreline
+/**
+ * Source level (dB at 1 m) heard from each tier. Drones fly the quad class. Air taxi: 110 dB gives about 65 dB at
+ * 500 ft, the published target for 4–5 seat eVTOLs. Personal flight: a single-seat eVTOL, assumed 6 dB quieter.
+ */
+export const TIER_NOISE = [AIRCRAFT.quad, { name: 'eVTOL air taxi', src: 110 }, { name: 'Single-seat personal eVTOL', src: 104 }];
+/** 'nearby' reaches the 55 dB footprint, but never less than this: about a block away. */
+export const NEAR_FLOOR_M = 150;
+/** Horizontal distance (m) where noiseAt (spreading plus air absorption) falls to db; 0 if never that loud. */
+export function heardWidth(altFt, ac, db = 55) {
+  let lo = 0, hi = noiseHalfWidth(altFt, ac, db); if (noiseAt(0, altFt, ac) < db) return 0;
+  for (let i = 0; i < 40; i++) { const m = (lo + hi) / 2; if (noiseAt(m, altFt, ac) >= db) lo = m; else hi = m; }
+  return lo;
+}
+const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+const LANE_CELL = 250, laneIdx = new WeakMap();
+/** Every lane segment in metres, bucketed by 250 m cells over its bounding box. Built once per lanes array and D. */
+function laneIndex(D, lanes) {
+  const c = laneIdx.get(lanes); if (c && c.D === D) return c;
+  const segs = [], h = new Map();
+  lanes.forEach((ln, k) => {
+    const xy = ln.p.map(D.proj);
+    for (let i = 0; i < xy.length - 1; i++) {
+      const a = xy[i], b = xy[i + 1], s = segs.push([k, a, b]) - 1;
+      for (let x = Math.floor(Math.min(a[0], b[0]) / LANE_CELL); x <= Math.floor(Math.max(a[0], b[0]) / LANE_CELL); x++)
+        for (let y = Math.floor(Math.min(a[1], b[1]) / LANE_CELL); y <= Math.floor(Math.max(a[1], b[1]) / LANE_CELL); y++) {
+          const key = x + ',' + y; if (!h.has(key)) h.set(key, []); h.get(key).push(s);
+        }
+    }
+  });
+  const v = { D, segs, h }; laneIdx.set(lanes, v); return v;
+}
+/** Nearest point on segment ab to p, and its distance. */
+function segNearest(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+  const t = L ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L)) : 0, q = [a[0] + t * dx, a[1] + t * dy];
+  return { q, d: hyp(p, q) };
+}
+/**
+ * The nearest lane piece of every tier level within radiusM of lonlat. Returns { at, tiers: [{ tier, id, name, today,
+ * levels: [{ level, dist m | null, piece index, status, statuses, nearest [lon, lat], bearing deg, dir, verdict, db, nearM }] }] }.
+ * verdict: 'overhead' within the lane half-width, 'nearby' within the tier's 55 dB footprint (heardWidth, at least
+ * NEAR_FLOOR_M), else 'clear'. statuses: every status of that level's pieces within the lane half-width (LANE_STATUS
+ * order), else [status]. dist, piece, status, nearest, bearing, dir and db are null when nothing lies within radiusM.
+ */
+export function lanesNear(D, lanes, lonlat, { radiusM = 1000 } = {}) {
+  const { segs, h } = laneIndex(D, lanes), p = D.proj(lonlat), best = new Map(), under = new Map(), seen = new Set();
+  for (let x = Math.floor((p[0] - radiusM) / LANE_CELL); x <= Math.floor((p[0] + radiusM) / LANE_CELL); x++)
+    for (let y = Math.floor((p[1] - radiusM) / LANE_CELL); y <= Math.floor((p[1] + radiusM) / LANE_CELL); y++)
+      for (const s of h.get(x + ',' + y) || []) {
+        if (seen.has(s)) continue; seen.add(s);
+        const [k, a, b] = segs[s], ln = lanes[k], r = segNearest(p, a, b), key = ln.t + ':' + ln.l, o = best.get(key);
+        if (r.d > radiusM) continue;
+        if (r.d <= LANE_HALF) { if (!under.has(key)) under.set(key, new Set()); under.get(key).add(ln.s); }
+        if (!o || r.d < o.d || (r.d === o.d && ln.s < lanes[o.k].s)) best.set(key, { ...r, k }); // ties go to the more flyable piece
+      }
+  return { at: lonlat, tiers: TIERS.map((tier, t) => ({ tier: t, id: tier.id, name: tier.name, today: tier.today, levels: tier.levels.map(level => {
+    const nearM = Math.max(NEAR_FLOOR_M, heardWidth(level, TIER_NOISE[t])), key = t + ':' + level, b = best.get(key);
+    if (!b) return { level, dist: null, piece: null, status: null, statuses: [], nearest: null, bearing: null, dir: null, verdict: 'clear', db: null, nearM };
+    const brg = (Math.atan2(b.q[0] - p[0], b.q[1] - p[1]) * 180 / Math.PI + 360) % 360;
+    const st = under.has(key) ? [...under.get(key)].sort((x, y) => x - y).map(i => LANE_STATUS[i]) : [LANE_STATUS[lanes[b.k].s]];
+    return { level, dist: b.d, piece: b.k, status: LANE_STATUS[lanes[b.k].s], statuses: st, nearest: D.unproj(b.q), bearing: brg, dir: COMPASS[Math.round(brg / 45) % 8],
+      verdict: b.d <= LANE_HALF ? 'overhead' : b.d <= nearM ? 'nearby' : 'clear', db: noiseAt(b.d, level, TIER_NOISE[t]), nearM };
+  }) })) };
 }
 
 // ---------- Routing on the lane network ----------
