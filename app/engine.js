@@ -200,13 +200,18 @@ function tallestNear(D, xy, r) {
 }
 const isBlocked = (D, xy, alt, o, r = o.clearM) => tallestNear(D, xy, r) > alt - o.obstacleVertFt;
 
-export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', ...opt } = {}) {
+/**
+ * Live constraints: stadium game windows ({ stadium, title, tfrStart, tfrEnd }) and TFRs ({ id, ring, effective, expire, lower_ft, upper_ft }).
+ * `when` is the planned departure; both lists are optional and the score is unchanged without them.
+ */
+export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', events = null, tfrs = [], when = new Date(), ...opt } = {}) {
   const o = { ...DEFAULTS, ...opt }, ac = typeof aircraft === 'string' ? AIRCRAFT[aircraft] : aircraft;
   index(D);
   const pts = route.map(p => D.proj(p)), alts = waypointAlts(route, altFt), rnd = rng(99);
   const samples = [], foot = [], footFrom = [], obst = new Map(), bld = new Map(), lines = new Map(), air = new Map(), noise = { hospital: 0, school: 0 };
   let lenM = 0, nextFoot = 0, overSum = 0, hi = 0, waterLandings = 0;
   const near = new Map();
+  const tfrPolys = (tfrs || []).filter(t => t.ring?.length > 3).map(t => { const rings = [[t.ring.map(D.proj)]]; return { t, rings, bbox: bboxOf(rings) }; });
   const sampleAt = (xy, along, alt) => {
     const d = density(D, xy, tod), fc = faaCategory(D, xy);
     return { xy, ll: D.unproj(xy), along, alt, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: isWater(D, xy),
@@ -232,9 +237,17 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
         if (st.kind === 'hospital' || st.kind === 'school') { const db = noiseAt(dm, alt, ac); if (db > 55) { noise[st.kind] = Math.max(noise[st.kind], db); near.set(st, Math.max(near.get(st) || 0, db)); } }
         if (st.kind === 'heliport' && dm < o.heliportM) air.set(`Heliport ${st.name}`, { kind: 'heliport', site: st, dm: Math.min(dm, air.get(`Heliport ${st.name}`)?.dm ?? Infinity) });
         if (st.kind === 'airport' && dm < 3000) air.set(`Airport ${st.name}`, { kind: 'airport', site: st, dm });
-        if (st.kind === 'stadium' && st.tfr && dm < STADIUM_TFR_M) air.set(`Stadium TFR ${st.name}`, { kind: 'stadium', site: st, dm, conditional: tod !== 'event' });
+        if (st.kind === 'stadium' && st.tfr && dm < STADIUM_TFR_M && !air.has(`Stadium TFR ${st.name}`)) {
+          const games = events ? events.filter(e => st.name.includes(e.stadium)) : null;
+          const now = games?.find(e => when >= e.tfrStart && when <= e.tfrEnd), next = games?.find(e => e.tfrStart > when);
+          air.set(`Stadium TFR ${st.name}`, { kind: 'stadium', site: st, dm, conditional: tod !== 'event' && !now, now, next, scheduled: !!games });
+        }
       }
       for (const P of D.surface) if (inPolys(xy[0], xy[1], P)) air.set(`${P.props.name}`, { kind: 'surface', cls: P.props.class });
+      for (const T of tfrPolys) if (alt >= (T.t.lower_ft ?? 0) && alt <= (T.t.upper_ft ?? Infinity) && inPolys(xy[0], xy[1], T)) {
+        const active = (!T.t.effective || when >= new Date(T.t.effective)) && (!T.t.expire || when <= new Date(T.t.expire));
+        air.set(`TFR ${T.t.id}`, { kind: 'tfr', tfr: T.t, conditional: !active, active });
+      }
       if (along >= nextFoot) {
         nextFoot += o.footEveryM;
         for (const p of footprint(xy, alt, ac, wind, o.footN, rnd)) {
@@ -379,6 +392,10 @@ function astar(nx, ny, blocked, S, T) {
 /** '300 ft AGL' or '250–375 ft AGL' when the route changes level. */
 export const altLabel = r => (r.levelled ? `${r.altMin}–${r.altMax}` : `${r.altMin}`) + ' ft AGL';
 
+const TZ = 'America/Los_Angeles';
+const fmtDay = d => d.toLocaleDateString('en-US', { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric' });
+const fmtTime = d => d.toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' });
+
 export function findings(r) {
   const f = [];
   const pct = x => Math.round(x * 100) + '%';
@@ -403,7 +420,16 @@ export function findings(r) {
     if (a.kind === 'heliport') f.push(['crit', `${a.name} is ${Math.round(a.dm)} m from the route. Coordinate with the heliport operator; letter of agreement expected.`]);
     if (a.kind === 'airport') f.push(['crit', `${a.name} within 3 km.`]);
     if (a.kind === 'surface') f.push(['crit', `Route enters the ${a.name} surface area (Class ${a.cls}).`]);
-    if (a.kind === 'stadium') f.push([a.conditional ? 'warn' : 'crit', `${a.site.name} is ${(a.dm / 1852).toFixed(1)} NM away: inside the 3 NM stadium TFR${a.conditional ? ' on event days' : ''}. No flight from 1 h before to 1 h after events.`]);
+    if (a.kind === 'stadium') {
+      const nm = `${a.site.name} is ${(a.dm / 1852).toFixed(1)} NM away, inside its 3 NM stadium TFR`;
+      const span = e => e.tbd ? `${fmtDay(e.tfrStart)}, all day (kickoff not announced)` : `${fmtDay(e.tfrStart)} ${fmtTime(e.tfrStart)}–${fmtTime(e.tfrEnd)}`;
+      if (a.now) f.push(['crit', `${nm}, active now for ${a.now.title} until ${fmtTime(a.now.tfrEnd)}.`]);
+      else if (!a.conditional) f.push(['crit', `${nm}. No flight from 1 h before to 1 h after events.`]);
+      else if (a.next) f.push(['warn', `${nm}. Next closure: ${span(a.next)} (${a.next.title}).`]);
+      else if (a.scheduled) f.push(['good', `${nm}; no MLB, NFL or NCAA football game there in the next 30 days.`]);
+      else f.push(['warn', `${nm} on event days. No flight from 1 h before to 1 h after events.`]);
+    }
+    if (a.kind === 'tfr') f.push([a.active ? 'crit' : 'warn', `${a.active ? 'Inside active' : 'Crosses upcoming'} TFR ${a.tfr.id} (${a.tfr.type.toLowerCase()}), ${a.tfr.lower_ft ?? 0}–${a.tfr.upper_ft} ft, ${fmtDay(new Date(a.tfr.effective))} ${fmtTime(new Date(a.tfr.effective))} to ${fmtDay(new Date(a.tfr.expire))} ${fmtTime(new Date(a.tfr.expire))}.`]);
   }
   const dense = `ground above ${r.opt.denseKm2.toLocaleString()} people/km²`;
   if (r.hiFrac > 0.25) f.push(['crit', `${pct(r.hiFrac)} of simulated failure landings fall on ${dense}. ${r.ac.chute ? 'The parachute lowers impact energy but widens drift under this wind.' : 'A parachute system would lower impact energy.'}`]);

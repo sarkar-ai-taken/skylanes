@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'   # hourly: refresh the TFR snapshot (tfr.faa.gov blocks browser requests)
 
 permissions:
   contents: read
@@ -26,7 +28,7 @@ jobs:
       - run: npm test
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'schedule'
     needs: test
     runs-on: ubuntu-latest
     environment:
@@ -34,6 +36,11 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch active TFRs
+        run: node pipeline/tfr.mjs || echo '{"fetched":null,"tfrs":[]}' > app/data/tfr.json
       - name: Assemble site
         run: |
           mkdir -p _site/prototypes

@@ -3,6 +3,7 @@ import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, prepare
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
 import { createScene } from './scene3d.js';
+import { windAloft, windAt, stadiumEvents, loadTfrs } from './live.js';
 
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -205,7 +206,40 @@ $('wind').addEventListener('change', async () => {
   }
   score();
 });
-const wind = () => ($('wind').value === 'live' && liveWind) || WIND_PRESETS[$('wind').value] || WIND_PRESETS.typical;
+const wind = () => {
+  if ($('wind').value === 'aloft' && live.wind && state.route.length) {
+    const alts = waypointAlts(state.route, +$('alt').value);
+    return windAt(live.wind, alts.reduce((a, b) => a + b, 0) / alts.length);
+  }
+  return ($('wind').value === 'live' && liveWind) || WIND_PRESETS[$('wind').value] || WIND_PRESETS.typical;
+};
+
+// ---------- Live conditions: wind aloft, stadium games, TFRs ----------
+const live = { wind: null, events: null, tfr: null, eventsFailed: 0 };
+const [cLon, cLat] = [(M.bbox[0] + M.bbox[2]) / 2, (M.bbox[1] + M.bbox[3]) / 2];
+Promise.all([
+  windAloft(cLat, cLon).then(w => (live.wind = w)),
+  stadiumEvents(30).then(e => { live.events = e.events; live.eventsFailed = e.failed; }).catch(() => (live.eventsFailed = 3)),
+  loadTfrs().then(t => (live.tfr = t)),
+]).then(() => { renderLive(); scene?.setLive(live); score(); });
+const tz = { timeZone: 'America/Los_Angeles' };
+const hm = d => d.toLocaleTimeString('en-US', { ...tz, hour: 'numeric', minute: '2-digit' });
+function renderLive() {
+  const w = live.wind;
+  kv('liveKv', [
+    ['Wind 33 / 262 / 394 ft', w ? w.levels.map(l => `${Math.round(l.kt)}`).join(' / ') + ` kt, ${w.levels[1].dir}°` : 'unavailable'],
+    ['Gusts at surface', w ? Math.round(w.gustKt) + ' kt' : '—'],
+    ['TFRs in Washington', live.tfr ? `${live.tfr.tfrs.length} active or upcoming` : 'snapshot unavailable'],
+    ['Stadium closures, 30 days', live.events ? live.events.length : 'unavailable'],
+  ]);
+  const now = new Date();
+  $('games').innerHTML = (live.events || []).slice(0, 5).map(e => {
+    const on = now >= e.tfrStart && now <= e.tfrEnd;
+    return `<li class="${on ? 'now' : ''}"><time>${e.tfrStart.toLocaleDateString('en-US', { ...tz, weekday: 'short', month: 'short', day: 'numeric' })}</time><span>${e.stadium} · ${e.title} · ${e.tbd ? 'all day, time TBA' : `${hm(e.tfrStart)}–${hm(e.tfrEnd)}`}${on ? ' · now' : ''}</span></li>`;
+  }).join('');
+  $('liveNote').textContent = [w && `Wind: Open-Meteo, ${hm(new Date(w.at))}.`, live.tfr && `TFRs: tfr.faa.gov, ${hm(new Date(live.tfr.fetched))}.`,
+    live.events && 'Games: MLB, ESPN.', live.eventsFailed ? `${live.eventsFailed} schedule feed${live.eventsFailed > 1 ? 's' : ''} unavailable.` : ''].filter(Boolean).join(' ');
+}
 
 const applyLayer = cb => { for (const id of LAYERS[cb.dataset.layer]) map.getLayer(id) && map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none'); };
 document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('change', () => applyLayer(cb)));
@@ -251,7 +285,7 @@ let lastTod = 'day';
 function score() {
   const tod = $('tod').value;
   if (tod !== lastTod && map.getSource('density')) { map.getSource('density').updateImage({ url: densityImage(tod), coordinates: gridCorners() }); lastTod = tod; }
-  state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod }) : null;
+  state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod, events: live.events, tfrs: live.tfr?.tfrs || [], when: new Date() }) : null;
   drawMap(); renderRail(); renderDoc(); saveHash();
   $('hint').textContent = state.route.length ? state.finished ? 'Route complete. Click a waypoint to set its altitude, or the map to start a new route.' : 'Keep clicking. Double-click to finish.' : 'Click to place waypoints. Double-click to finish.';
 }
@@ -292,7 +326,7 @@ let doc = null;
 function renderDoc() {
   const r = state.result;
   if (!r) { doc = null; $('docBody').innerHTML = '<p class="note">The package appears once a route is scored.</p>'; return; }
-  doc = sections(D, r, intendedArea(D, r));
+  doc = sections(D, r, intendedArea(D, r), undefined, live);
   $('docBody').innerHTML = toHTML(doc);
 }
 function save(name, text, type) {

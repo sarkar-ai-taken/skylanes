@@ -10,7 +10,7 @@ export function corridorId(r) {
   return `SEA-${Math.abs(Math.round(lat * 1000) % 1000).toString().padStart(3, '0')}${Math.abs(Math.round(lon * 1000) % 1000).toString().padStart(3, '0')}-${String(Math.round(r.lenM)).padStart(5, '0')}`;
 }
 
-export function sections(D, r, area, today = new Date().toISOString().slice(0, 10)) {
+export function sections(D, r, area, today = new Date().toISOString().slice(0, 10), live = null) {
   const f = findings(r), m = D.manifest, L = m.layers;
   const catRows = [1, 2, 3, 4, 5].map(c => {
     const n = r.samples.filter(s => s.c === c).length;
@@ -41,6 +41,9 @@ export function sections(D, r, area, today = new Date().toISOString().slice(0, 1
   open.push('Site survey of launch and delivery points for distribution lines, trees and temporary obstacles.');
   open.push('Replace the generic aircraft class with the operator\'s airframe data (descent rate, glide, source noise, lost-link logic) and its demonstrated failure rate.');
   const sources = Object.entries(L).map(([k, v]) => [k, v.source, v.count.toLocaleString()]);
+  if (live?.wind) sources.push(['wind aloft', `Open-Meteo forecast, 10 / 80 / 120 m, valid ${live.wind.at}`, 'live']);
+  if (live?.tfr) sources.push(['TFRs', `tfr.faa.gov snapshot ${live.tfr.fetched}`, String(live.tfr.tfrs.length)]);
+  if (live?.events) sources.push(['stadium games', 'MLB statsapi, ESPN schedules (FDC 4/3621 stadium TFR windows)', String(live.events.length)]);
   return {
     title: 'Concept of Operations, Hazard Assessment and Area of Intended Flight',
     meta: `Corridor ${corridorId(r)} · prepared ${today} · data built ${m.built} · draft for review, not a filed document`,

@@ -43,7 +43,7 @@ function offset(D, pts, side, z) {
 export function createScene(map, D, raw) {
   const overlay = new MapboxOverlay({ interleaved: true, layers: [], effects: [lighting] });
   map.addControl(overlay);
-  let r = null, route = [], visible = true, t0 = performance.now(), raf = 0;
+  let r = null, route = [], visible = true, t0 = performance.now(), raf = 0, live = { events: null, tfr: null };
 
   // Sky lanes: pieces in 3D, each with metre lengths for placing traffic.
   const lanes = (raw.lanes || []).map(ln => {
@@ -98,7 +98,13 @@ export function createScene(map, D, raw) {
       new ColumnLayer({ id: 'heli', data: heli, diskResolution: 48, radius: 800, extruded: true, wireframe: true, filled: true,
         getPosition: s => [s.lon, s.lat], getElevation: 152, getFillColor: [...RED, 5], getLineColor: [...RED, 55], parameters: GLASS, pickable: true }),
     ];
-    if (r?.tod === 'event') L.push(new ColumnLayer({ id: 'tfr', data: stadiums, diskResolution: 64, radius: 5556, extruded: true, wireframe: true,
+    // Stadium TFR cylinders while a game window is open (or in the event-day scenario); TFR volumes from the FAA snapshot.
+    const nowD = new Date(), liveGames = (live.events || []).filter(e => nowD >= e.tfrStart && nowD <= e.tfrEnd);
+    const closed = stadiums.filter(st => r?.tod === 'event' || liveGames.some(e => st.name.includes(e.stadium)));
+    const tfrVols = (live.tfr?.tfrs || []).filter(t => t.ring?.length > 3);
+    if (tfrVols.length) L.push(new SolidPolygonLayer({ id: 'tfr-vol', data: tfrVols, getPolygon: t => t.ring.map(p => [p[0], p[1], (t.lower_ft || 0) / FT]), extruded: true,
+      getElevation: t => (Math.min(t.upper_ft ?? 3000, 3000) - (t.lower_ft || 0)) / FT, getFillColor: [176, 140, 255, 30], parameters: GLASS }));
+    if (closed.length) L.push(new ColumnLayer({ id: 'tfr', data: closed, diskResolution: 64, radius: 5556, extruded: true, wireframe: true,
       getPosition: s => [s.lon, s.lat], getElevation: 914, getFillColor: [...AMBER, 10], getLineColor: [...AMBER, 50], parameters: GLASS }));
     if (net.shown.length) {
       L.push(new PathLayer({ id: 'lanes-slab', data: net.shown, getPath: ln => ln.p3, getColor: ln => laneColor(ln, ln.status === 'open' ? 34 : 46), getWidth: 36, widthMinPixels: 2, parameters: GLASS, updateTriggers: { getColor: net.shown.length } }));
@@ -165,6 +171,7 @@ export function createScene(map, D, raw) {
     setVisible(v) { visible = v; if (!v) { cancelAnimationFrame(raf); overlay.setProps({ layers: [] }); } else kick(); },
     tooltip: overlay,
     /** on/off, per-tier visibility, traffic percent. Returns vehicles airborne and capacity. */
+    setLive(l) { live = l; kick(); },
     setNetwork({ on = net.on, tiers = net.tiers, pct = net.pct } = {}) { Object.assign(net, { on, tiers, pct }); refreshNet(); kick(); return { airborne: net.vehicles.length, capacity: net.capacity }; },
   };
 }

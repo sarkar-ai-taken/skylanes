@@ -83,6 +83,8 @@ body[data-view="3d"] .layers,body[data-view="3d"] .legendplan,body:not([data-vie
 .sp-traffic select{background:#121920;color:#e6ebee;border-color:#2a3642;padding:3px 6px}
 body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 @media(max-width:600px){.skypanel:not([open]){width:auto}}
+.games{list-style:none;margin:8px 0 0;padding:0;font-size:12px;display:flex;flex-direction:column;gap:3px}
+.games li{display:grid;grid-template-columns:7.5em 1fr;gap:6px}.games li.now{color:var(--crit);font-weight:600}.games time{font-family:var(--mono);color:var(--muted)}
 .toast{max-width:min(520px,calc(100vw - 32px));position:fixed;bottom:16px;right:16px;background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:4px;font-size:13px;z-index:10}
 .maplibregl-popup-content{background:var(--panel);color:var(--fg);font-family:var(--font);font-size:12px}
 .loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--panel);z-index:3;color:var(--muted)}
@@ -121,8 +123,8 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
     <div class="toolbar">
       <select id="route" autocomplete="off" aria-label="Sample route"></select>
       <select id="aircraft" autocomplete="off" aria-label="Aircraft"></select>
-      <select id="alt" autocomplete="off" aria-label="Altitude"><option value="150">150 ft AGL</option><option value="200">200 ft AGL</option><option value="250">250 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="400">400 ft AGL</option></select>
-      <select id="wind" autocomplete="off" aria-label="Wind"><option value="calm">Wind 5 kt S</option><option value="typical" selected>Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="live">Wind: live at KBFI</option></select>
+      <select id="alt" autocomplete="off" aria-label="Altitude"><option value="150">150 ft AGL</option><option value="200">200 ft AGL</option><option value="250">250 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="350">350 ft AGL</option><option value="400">400 ft AGL</option></select>
+      <select id="wind" autocomplete="off" aria-label="Wind"><option value="aloft" selected>Wind: live at altitude</option><option value="calm">Wind 5 kt S</option><option value="typical">Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="live">Wind: surface at KBFI</option></select>
       <select id="tod" autocomplete="off" aria-label="Time of day"><option value="day" selected>Weekday daytime</option><option value="night">Overnight</option><option value="event">Stadium event day</option></select>
       <button id="climb" title="Raise only the legs that hit something, up to 400 ft and the ceiling">Climb over</button>
       <button id="around" title="Find a path around buildings and obstacles at this altitude">Go around</button>
@@ -154,6 +156,8 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
       <div class="note" style="margin-top:6px">FAA category along the route</div><div class="seg" id="segbar"></div></div>
     <div class="card"><h2>Ground risk</h2><dl class="kv" id="riskKv"></dl></div>
     <div class="card"><h2>Airspace and obstacles</h2><dl class="kv" id="airKv"></dl></div>
+    <div class="card"><h2>Live conditions</h2><dl class="kv" id="liveKv"><dt>Loading</dt><dd>…</dd></dl>
+      <ul class="games" id="games"></ul><div class="note" id="liveNote"></div></div>
     <div class="card"><h2>Noise</h2><dl class="kv" id="noiseKv"></dl></div>
     <div class="card"><h2>Findings</h2><ul class="findings" id="findings"></ul></div>
   </aside>

@@ -14,6 +14,11 @@ drones at 250 / 350 ft (flyable today), air taxis at 800 / 1000 ft and personal 
 Every stretch is scored with the same engine: open, blocked by a structure, over the LAANC ceiling, over Category 5
 ground, or inside Class B (needs ATC). A traffic control fills open lanes to 0–100% of capacity (one aircraft per 500 m).
 
+**Live conditions** (no keys): wind at 10 / 80 / 120 m from Open-Meteo, interpolated to the route's altitude;
+MLB, NFL and NCAA football home games (MLB statsapi, ESPN) that switch on the FAA stadium TFR, with exact closure
+windows; and active Washington TFRs from tfr.faa.gov. That site blocks browser requests, so the Pages workflow
+fetches it hourly (`pipeline/tfr.mjs`) and ships `data/tfr.json` with the site.
+
 **Live:** https://sarkar-ai-taken.github.io/skylanes/ · no sign-up, no API keys, runs entirely in the browser.
 Every analysis is a shareable link (the route and settings live in the URL).
 
@@ -59,7 +64,9 @@ run `npm run build-data`, commit `app/data/`, and update the initial map bounds 
 | Heliports, airports, stadiums | FAA ADDS + OSM |
 | Hospitals, schools | OSM |
 | Sky-lane network | OSM `highway=motorway/trunk/primary/secondary`, scored by `pipeline/lanes.mjs` |
-| Wind | NWS api.weather.gov, KBFI latest observation (live) or presets |
+| Wind | Open-Meteo forecast at 10 / 80 / 120 m (live, default); NWS KBFI surface observation; presets |
+| Stadium TFR windows | MLB statsapi (Mariners), ESPN (Seahawks, Huskies), live |
+| TFRs | tfr.faa.gov list + XNOTAM shapes, hourly |
 | Basemap and 3D buildings | OpenFreeMap (OpenMapTiles) |
 
 Known gaps are written into every generated package (section 8).

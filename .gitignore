@@ -7,3 +7,4 @@ node_modules/
 founder/
 docs/
 __pycache__/
+app/data/tfr.json

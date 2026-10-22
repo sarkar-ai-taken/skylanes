@@ -110,3 +110,50 @@ test('sky lanes: every piece has a valid tier, level and status, and drone lanes
   const open = lanes.filter(ln => ln.t === 0 && ln.s === 0).slice(0, 50);
   for (const ln of open) { const m = ln.p[Math.floor(ln.p.length / 2)]; assert.equal(laneStatus(D, D.proj(m), ln.l, TIERS[0]), 'open'); }
 });
+
+test('stadium TFR uses the game schedule: active during a game window, next closure otherwise', () => {
+  const R = route('fremont'); // 1.3 NM from Husky Stadium
+  const kickoff = new Date('2026-11-07T20:30:00Z');
+  const events = [{ stadium: 'Husky Stadium', title: 'PSU @ WASH', start: kickoff, tfrStart: new Date(kickoff - 36e5), tfrEnd: new Date(+kickoff + 4.5 * 36e5) }];
+  const during = findings(scoreRoute(D, R, { events, when: new Date(+kickoff + 36e5) }));
+  assert.ok(during.some(([s, t]) => s === 'crit' && t.includes('active now') && t.includes('PSU @ WASH')));
+  const before = findings(scoreRoute(D, R, { events, when: new Date('2026-11-01T18:00:00Z') }));
+  assert.ok(before.some(([s, t]) => s === 'warn' && t.includes('Next closure')));
+  const none = findings(scoreRoute(D, R, { events: [], when: new Date('2026-11-01T18:00:00Z') }));
+  assert.ok(none.some(([s, t]) => s === 'good' && t.includes('no MLB')));
+});
+
+test('a TFR polygon over the route blocks it while active', async () => {
+  const { parseXnotam } = await import('../pipeline/tfr.mjs');
+  const fixture = parseXnotam(readFileSync(new URL('./fixtures/tfr_6_1500.xml', import.meta.url), 'utf8'));
+  assert.ok(fixture.ring.length > 30);
+  assert.deepEqual(fixture.ring[0], fixture.ring[fixture.ring.length - 1]);
+  assert.equal(fixture.upper_ft, 7500);
+  // a synthetic 2 km square over Magnolia, ground to 1,000 ft
+  const sq = [[-122.41, 47.640], [-122.38, 47.640], [-122.38, 47.655], [-122.41, 47.655], [-122.41, 47.640]];
+  const tfr = { id: '6/9999', type: 'HAZARDS', ring: sq, lower_ft: 0, upper_ft: 1000, effective: '2026-10-22T15:00:00Z', expire: '2026-10-23T02:00:00Z' };
+  const on = findings(scoreRoute(D, route('magnolia'), { tfrs: [tfr], when: new Date('2026-10-22T18:00:00Z') }));
+  assert.ok(on.some(([s, t]) => s === 'crit' && t.includes('Inside active TFR 6/9999')));
+  const off = findings(scoreRoute(D, route('magnolia'), { tfrs: [tfr], when: new Date('2026-10-24T18:00:00Z') }));
+  assert.ok(!off.some(([s, t]) => s === 'crit' && t.includes('TFR 6/9999')));
+});
+
+test('wind aloft interpolates between model levels', async () => {
+  const { windAt } = await import('../app/live.js');
+  const p = { levels: [{ ft: 33, kt: 6, dir: 200 }, { ft: 262, kt: 12, dir: 210 }, { ft: 394, kt: 16, dir: 220 }], gustKt: 9 };
+  const w = windAt(p, 300);
+  assert.ok(w.kt > 12 && w.kt < 16, `kt ${w.kt}`);
+  assert.ok(w.dir >= 210 && w.dir <= 220, `dir ${w.dir}`);
+  assert.equal(windAt(p, 262).kt, 12);
+});
+
+test('pacific midnight handles both sides of the daylight-saving change', async () => {
+  const { pacificMidnight } = await import('../app/live.js');
+  assert.equal(pacificMidnight('2026-10-25').toISOString(), '2026-10-25T07:00:00.000Z'); // PDT
+  assert.equal(pacificMidnight('2026-11-07').toISOString(), '2026-11-07T08:00:00.000Z'); // PST
+});
+
+test('every sample route altitude is a selectable level', async () => {
+  const html = readFileSync(new URL('../app/index.html', import.meta.url), 'utf8');
+  for (const R of (await import('../app/routes.js')).ROUTES) assert.ok(html.includes(`<option value="${R.altFt}"`), `${R.id} ${R.altFt}`);
+});
