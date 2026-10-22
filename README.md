@@ -48,6 +48,9 @@ home connection; reruns reuse it. `fetch.py --force --only <name>,<name>` refetc
   autopilot keeps the speed; pushing past an edge is refused with an error and that edge lights red. Virtual traffic
   signals sit at the busiest lane junctions (at least 2 km apart); the taxi brakes for red and holds before the gate
   (`app/ride-sim.js`, deterministic, tested).
+  **Game mode** (phones and tablets): tilt the device to fly instead of pressing buttons. Lean left / right to steer,
+  pull the top toward you to climb; the pose you hold at take-off is level and LEVEL re-centres it. iOS asks for motion
+  access once.
 - **Fleet** (`fleet.html`): place a warehouse, set drones, order rate, radius and delivery promise. Orders arrive at
   census-weighted homes; each is checked by the engine (range, Category 5 drop, airspace approval, buildings, stadium
   TFRs) and either dispatched, rerouted, flown lower or refused with a reason. Playback in 3D with KPIs and charts

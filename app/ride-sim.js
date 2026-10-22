@@ -62,3 +62,25 @@ export function fly(L, signals = [], { t0 = 0, dt = 0.1 } = {}) {
   }
   return { line, T: t, wait };
 }
+
+// ---------- game mode: tilt the phone to fly ----------
+export const TILT = { dead: 4, full: 25 }; // degrees from the held pose: ignored below dead, full input at full
+
+/**
+ * Roll and pitch (degrees) of the screen as the user sees it, from deviceorientation β, γ and the screen rotation.
+ * Goes through the gravity vector, so it has no gimbal flip when a landscape phone is held near upright.
+ * roll > 0: right edge down. pitch: 0 flat, 90 upright facing the user.
+ */
+export function screenTilt(beta, gamma, angle = 0) {
+  const r = Math.PI / 180, b = beta * r, g = gamma * r, a = angle * r;
+  const gx = Math.cos(b) * Math.sin(g), gy = -Math.sin(b), gz = -Math.cos(b) * Math.cos(g); // gravity in device axes
+  const sx = gx * Math.cos(a) - gy * Math.sin(a), sy = gx * Math.sin(a) + gy * Math.cos(a);
+  return { roll: Math.asin(Math.max(-1, Math.min(1, sx))) / r, pitch: Math.atan2(-sy, -gz) / r };
+}
+
+/** Stick input in [-1, 1] from the tilt away from the held pose: x right, y climb (pull the top toward you). */
+export function tiltInput(now, held, { dead, full } = TILT) {
+  const axis = d => { const m = Math.abs(d); return m < dead ? 0 : Math.sign(d) * Math.min(1, (m - dead) / (full - dead)); };
+  let dp = now.pitch - held.pitch; dp = ((dp + 540) % 360) - 180;
+  return { x: axis(now.roll - held.roll), y: axis(dp) };
+}

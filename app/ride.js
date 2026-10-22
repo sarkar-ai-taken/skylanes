@@ -5,7 +5,7 @@ import { FT, TIERS, laneGraph, routeOnLanes } from './engine.js';
 import { createScene } from './scene3d.js';
 import { VERTIPORTS } from './vertiports.js';
 import { mountExpand } from './expand.js';
-import { LANE_HALF, BAND, SIGNAL, signalState, placeSignals, fly } from './ride-sim.js';
+import { LANE_HALF, BAND, SIGNAL, signalState, placeSignals, fly, screenTilt, tiltInput } from './ride-sim.js';
 
 const $ = id => document.getElementById(id);
 $('nav').innerHTML = nav('ride');
@@ -104,15 +104,17 @@ function heading(i, ahead) {
 const offset = (p, dir, m, dz = 0) => { const q = D.proj(p); return [...D.unproj([q[0] + dir[0] * m, q[1] + dir[1] * m]), p[2] + dz]; };
 
 // ---------- taking over: arrows (or WASD) steer within the lane box; the autopilot keeps the speed ----------
-const ctl = { lat: 0, dz: 0, manual: false, keys: new Set(), err: null, errUntil: 0, errMsg: '' };
+const ctl = { lat: 0, dz: 0, manual: false, keys: new Set(), err: null, errUntil: 0, errMsg: '', tilt: { x: 0, y: 0 } };
 const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', a: 'left', d: 'right', w: 'up', s: 'down' };
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
 /** Apply the pilot's input for dt real seconds and return st moved off the centreline by the pilot's offsets. */
 function steer(st, dt, now) {
   const env = clamp(Math.min(st.done / EASE_M, (trip.L - st.done) / EASE_M), 0, 1), lim = LANE_HALF * env, vlim = BAND * env;
-  const k = ctl.keys, dx = (k.has('right') ? 1 : 0) - (k.has('left') ? 1 : 0), dy = (k.has('up') ? 1 : 0) - (k.has('down') ? 1 : 0);
-  if ((dx || dy) && env === 0) fault(null, 'Controls are locked during vertical take-off and landing.', now);
+  const k = ctl.keys, kx = (k.has('right') ? 1 : 0) - (k.has('left') ? 1 : 0), ky = (k.has('up') ? 1 : 0) - (k.has('down') ? 1 : 0);
+  // keys win over the tilt; the tilt is analog, so a gentle lean steers gently
+  const dx = kx || ky ? kx : game.on ? ctl.tilt.x : 0, dy = kx || ky ? ky : game.on ? ctl.tilt.y : 0;
+  if ((kx || ky || Math.max(Math.abs(dx), Math.abs(dy)) > 0.5) && env === 0) fault(null, 'Controls are locked during vertical take-off and landing.', now);
   else if (dx || dy) ctl.manual = true;
   if (ctl.manual && env > 0) {
     const lat = ctl.lat + dx * STEER_MS * dt, dz = ctl.dz + dy * CLIMB_MS * dt;
@@ -134,11 +136,11 @@ function steer(st, dt, now) {
   return { ...st, p: offset(st.p, r, ctl.lat, ctl.dz), env };
 }
 function fault(side, msg, now) {
-  if (ctl.errMsg !== msg || now > ctl.errUntil) { $('alert').textContent = msg; ctl.errMsg = msg; }
+  if (ctl.errMsg !== msg || now > ctl.errUntil) { $('alert').textContent = msg; ctl.errMsg = msg; if (game.on && side) navigator.vibrate?.(60); }
   ctl.err = side; ctl.errUntil = now + 2200;
 }
 function autopilot() { ctl.manual = false; }
-function resetControl() { Object.assign(ctl, { lat: 0, dz: 0, manual: false, err: null, errUntil: 0, errMsg: '' }); ctl.keys.clear(); }
+function resetControl() { Object.assign(ctl, { lat: 0, dz: 0, manual: false, err: null, errUntil: 0, errMsg: '', tilt: { x: 0, y: 0 } }); ctl.keys.clear(); game.held = null; wake(); }
 
 addEventListener('keydown', e => {
   if (!flying || e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
@@ -154,6 +156,45 @@ document.querySelectorAll('[data-dir]').forEach(b => {
   ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, up));
 });
 $('autopilot').onclick = autopilot;
+
+// ---------- game mode: tilt the phone to steer and climb ----------
+// The pose the phone is in when the flight starts (or LEVEL is pressed) is neutral; leaning away from it is stick input.
+const game = { on: false, held: null, now: null, seen: false, lock: null };
+const angle = () => screen.orientation?.angle ?? window.orientation ?? 0;
+function onTilt(e) {
+  if (e.beta == null || e.gamma == null) return;
+  game.seen = true; game.now = screenTilt(e.beta, e.gamma, angle());
+  if (!game.held) game.held = game.now;
+  ctl.tilt = tiltInput(game.now, game.held);
+}
+const level = () => { game.held = game.now; ctl.tilt = { x: 0, y: 0 }; };
+async function setGame(on) {
+  if (on && typeof DeviceOrientationEvent === 'undefined') return say('This device has no motion sensor. Use the arrows or WASD.');
+  // iOS asks once per site, and only from a tap
+  if (on && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try { if (await DeviceOrientationEvent.requestPermission() !== 'granted') return say('Motion access was declined, so game mode is off. Allow it in Safari settings for this site to fly by tilting.'); }
+    catch { return say('Motion access could not be requested. Use the arrows.'); }
+  }
+  game.on = on; game.held = null; ctl.tilt = { x: 0, y: 0 };
+  if (on) {
+    addEventListener('deviceorientation', onTilt);
+    setTimeout(() => { if (game.on && !game.seen) { setGame(false); say('No motion sensor answered. Game mode needs a phone or tablet; use the arrows here.'); } }, 1500);
+    wake();
+  } else { removeEventListener('deviceorientation', onTilt); game.lock?.release().catch(() => {}); game.lock = null; }
+  document.body.classList.toggle('game', on);
+  document.querySelectorAll('[data-game]').forEach(b => b.setAttribute('aria-pressed', String(on)));
+  $('hHow').textContent = on ? 'tilt to steer, pull back to climb, LEVEL to re-centre' : 'arrows or WASD to steer, space for autopilot';
+  say(on ? 'Game mode on. Hold the phone how you like; that pose is level.' : '');
+}
+/** Keep the screen awake: nobody touches it while steering by tilt. */
+async function wake() { try { if (flying && game.on && !game.lock) { game.lock = await navigator.wakeLock?.request('screen'); game.lock?.addEventListener('release', () => { game.lock = null; }); } } catch { /* not supported or not visible */ } }
+/** Game-mode notes go under the toggle while booking, and to the alert strip in flight (the card is hidden then). */
+const say = msg => { $('gameNote').textContent = msg; if (flying && msg) fault(null, msg, performance.now()); };
+document.querySelectorAll('[data-game]').forEach(b => b.addEventListener('click', () => setGame(!game.on)));
+$('level').onclick = level;
+screen.orientation?.addEventListener('change', () => { game.held = null; });
+addEventListener('orientationchange', () => { game.held = null; });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake(); });
 
 // ---------- vehicle: a low-poly eVTOL mesh (fuselage, wing, tail, six rotors) ----------
 function vehicleMesh() {

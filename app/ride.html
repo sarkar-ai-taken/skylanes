@@ -80,6 +80,13 @@ body.flying .pad{opacity:1;pointer-events:auto}
 .pad [data-dir=up]{grid-area:1/2}.pad [data-dir=left]{grid-area:2/1}.pad [data-dir=right]{grid-area:2/3}.pad [data-dir=down]{grid-area:3/2}
 .pad #autopilot{grid-area:2/2;font-size:10px;font-family:var(--mono);letter-spacing:.04em}
 body.manual .pad #autopilot{border-color:var(--taxi);color:var(--taxi)}
+/* game mode: the tilt replaces the arrows; AUTO and LEVEL stay */
+.pad #level{display:none;grid-area:3/2;font-size:10px;font-family:var(--mono);letter-spacing:.04em}
+body.game .pad [data-dir]{display:none}
+body.game .pad #level{display:block}
+button.gamebtn{width:100%;margin-top:10px;font-size:13px}
+button[data-game][aria-pressed="true"]{background:rgba(82,201,162,.2);border-color:var(--accent);color:#fff}
+#gameNote:not(:empty){margin-top:6px}
 .ctlbar{position:fixed;left:16px;bottom:172px;z-index:5;font-size:12px;color:var(--muted);opacity:0;transition:opacity .4s;text-shadow:0 1px 6px #000}
 body.flying .ctlbar{opacity:1}
 .ctlbar b{color:var(--fg);font-weight:500}
@@ -110,6 +117,8 @@ body.fault .vignette{background:radial-gradient(ellipse at center,transparent 50
   <div class="note" id="qNote"></div>
   <button class="go" id="go">Board and fly</button>
   <div class="seg" role="group" aria-label="Camera"><button data-cam="chase" aria-pressed="true">Chase</button><button data-cam="cabin" aria-pressed="false">Cabin</button><button data-cam="orbit" aria-pressed="false">Orbit</button></div>
+  <button class="gamebtn" data-game aria-pressed="false">Game mode: tilt your phone to fly</button>
+  <div class="note" id="gameNote" aria-live="polite"></div>
 </section>
 
 <div class="hud" aria-live="polite">
@@ -120,19 +129,21 @@ body.fault .vignette{background:radial-gradient(ellipse at center,transparent 50
   <div><small>Arrive in</small><b id="hEta">–</b></div>
   <div><small>Next signal</small><b id="hSig">–</b></div>
 </div>
-<div class="ctlbar"><b id="hCtl">Autopilot</b> · arrows or WASD to steer, space for autopilot</div>
+<div class="ctlbar"><b id="hCtl">Autopilot</b> · <span id="hHow">arrows or WASD to steer, space for autopilot</span></div>
 <div class="pad" role="group" aria-label="Steer within the lane">
   <button data-dir="up" aria-label="Climb">↑</button>
   <button data-dir="left" aria-label="Steer left">←</button>
   <button id="autopilot" aria-label="Hand back to autopilot">AUTO</button>
   <button data-dir="right" aria-label="Steer right">→</button>
   <button data-dir="down" aria-label="Descend">↓</button>
+  <button id="level" aria-label="Make the current phone pose level">LEVEL</button>
 </div>
 <div class="alert" id="alert" role="alert"></div>
 <div class="controls">
   <button data-cam="chase" aria-pressed="true">Chase view</button>
   <button data-cam="cabin" aria-pressed="false">Cabin view</button>
   <button data-cam="orbit" aria-pressed="false">Orbit</button>
+  <button data-game aria-pressed="false">Game mode</button>
   <button id="speed">Speed 3×</button>
   <button id="abort">End flight</button>
 </div>
