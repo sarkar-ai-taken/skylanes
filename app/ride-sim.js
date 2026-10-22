@@ -1,8 +1,10 @@
 // Air-taxi flight along a lane route with virtual traffic signals at lane junctions. Pure and deterministic, so the
 // ride page and the node tests fly the same trip: autopilot speed only, the pilot's steering never changes timing.
+import { LANE_HALF } from './engine.js';
 
 export const CRUISE_MS = 55, ACCEL = 1.2, BRAKE = 2.5, MIN_MS = 4; // m/s, m/s², m/s², creeping speed off the pads
-export const LANE_HALF = 40, BAND = 30; // the lane is 80 m wide and 60 m (about 200 ft) tall around its level
+export { LANE_HALF }; // the lane is 80 m wide (defined once in the engine)
+export const BAND = 30; // and 60 m (about 200 ft) tall around its level
 // Each signal cycles green, amber, red; cross traffic at the junction gets the red share. Amber outlasts the time to
 // brake from cruise (CRUISE_MS / BRAKE), so a taxi that cannot stop is through before red. It holds stopM before the gate.
 export const SIGNAL = { cycle: 60, green: 28, amber: 12, stopM: 80 };

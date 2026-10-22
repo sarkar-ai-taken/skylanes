@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skylanes My Address</title>
+<meta name="description" content="Type a Greater Seattle address and see whether any drone, air-taxi or personal-flight lane runs over it.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath d=%27M2 13 L7 6 L10 9 L14 3%27 fill=%27none%27 stroke=%27%2352c9a2%27 stroke-width=%272.5%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Layout: one question. Map left with the address, its rings and the nearby lanes; the answer in a rail right. */
+:root{
+  --bg:#0c1116; --panel:#121920; --panel2:#18212a; --fg:#e6ebee; --muted:#8c9aa6; --line:#24303b;
+  --accent:#52c9a2; --drone:#52c9a2; --taxi:#6aa9ff; --personal:#f2b84b; --warn:#f2b84b; --crit:#ef6b5c;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 420px;height:100vh}
+@media(max-width:900px){.app{grid-template-columns:minmax(0,1fr);height:auto}.mapwrap{height:52vh;order:2}.rail{border-left:0;order:1}}
+.mapwrap{position:relative;min-height:320px}
+#map{position:absolute;inset:0}
+.rail{overflow-y:auto;border-left:1px solid var(--line);background:var(--panel);padding:16px;min-width:0}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.brand{font-weight:600}.brand span{color:var(--accent)}
+.pages{display:flex;gap:4px;flex-wrap:wrap}
+.pages a{color:var(--muted);text-decoration:none;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+.pages a[aria-current]{color:var(--fg);border-color:var(--accent)}
+h1{font-size:18px;margin:0 0 4px}
+.lede{color:var(--muted);font-size:13px;margin:0 0 14px}
+form{display:flex;gap:6px}
+input[type=search]{flex:1;min-width:0;font:inherit;font-size:14px;padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--fg)}
+button{font:inherit;font-size:13px;padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#07130f;font-weight:600}
+button:disabled{opacity:.55;cursor:default}
+button:focus-visible,input:focus-visible,.matches button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.fine{font-size:11px;color:var(--muted);margin-top:6px}
+.status{font-size:12px;color:var(--muted);min-height:1.2em;margin-top:8px}
+.status.err{color:var(--crit)}
+.matches{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.matches button{width:100%;text-align:left;font-size:12px;line-height:1.35;padding:6px 10px}
+.matches button[aria-pressed=true]{border-color:var(--accent);background:rgba(82,201,162,.1)}
+.sec{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+.sec h2{font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:500}
+.answer{border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:8px;padding:12px 14px;background:var(--panel2)}
+.answer[data-v=overhead]{border-left-color:var(--drone)}.answer[data-v=nearby]{border-left-color:var(--warn)}
+.answer .where{font-size:12px;color:var(--muted);margin-bottom:6px;overflow-wrap:anywhere}
+.answer .big{font-size:20px;font-weight:600;line-height:1.25;margin:0 0 6px}
+.answer p{margin:6px 0 0;font-size:13px;line-height:1.45}
+.answer .muted{color:var(--muted)}
+table{border-collapse:collapse;font-size:12px;width:100%;font-variant-numeric:tabular-nums}
+th,td{border-bottom:1px solid var(--line);padding:5px 4px;text-align:right;vertical-align:top}th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500}
+td .sw{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.tag{font-family:var(--mono);font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.tag.overhead{border-color:var(--drone);color:var(--drone)}.tag.nearby{border-color:var(--warn);color:var(--warn)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend span{display:flex;gap:6px;align-items:center}.legend i{width:16px;height:3px;border-radius:2px}
+.legend i.ring{width:10px;height:10px;border-radius:50%;border:2px solid var(--fg);background:transparent}
+.legend i.dash{background:repeating-linear-gradient(90deg,var(--muted) 0 4px,transparent 4px 7px)}
+.note{font-size:11px;color:var(--muted)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.hint{position:absolute;top:12px;left:12px;background:rgba(18,25,32,.9);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--muted);z-index:3;max-width:calc(100% - 70px)}
+.loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--bg);z-index:4;color:var(--muted);transition:opacity .4s}
+.maplibregl-ctrl-attrib{font-size:10px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="mapwrap">
+    <div id="map" role="application" aria-label="Map of the sky lanes near your address. Click to check a point."></div>
+    <div class="hint">Click the map to check any point.</div>
+    <div class="loading" id="loading">Loading the sky lanes…</div>
+  </div>
+
+  <aside class="rail">
+    <header><div class="brand">Sky<span>lanes</span> My address</div><div id="nav"></div></header>
+    <h1>Is my home under a sky lane?</h1>
+    <p class="lede">Lanes follow the big arterial roads. Type an address in King, Pierce, Snohomish or Kitsap county to see what flies over it.</p>
+
+    <form id="find" role="search" autocomplete="off">
+      <label for="q" class="sr">Street address</label>
+      <input type="search" id="q" name="q" placeholder="e.g. 400 Broad St, Seattle" autocomplete="street-address" enterkeyhint="search" required>
+      <button type="submit" class="primary" id="go">Check</button>
+    </form>
+    <div class="row"><button type="button" id="locate">Use my location</button><span class="note">or click the map</span></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <ul class="matches" id="matches" aria-label="Matching addresses" hidden></ul>
+    <p class="fine">The address you type is sent to OpenStreetMap Nominatim to find it on the map, and the map loads background tiles for the area from OpenFreeMap. The lane check itself runs on this page, and your address is not stored.</p>
+
+    <div class="sec" id="answerSec" hidden><h2>Answer</h2><div class="answer" id="answer" aria-live="polite"></div>
+      <p class="note" style="margin-top:8px">Prototype for planning and discussion. The lanes are a concept drawn on arterial roads, not filed or operating routes; no operator flies them. Not an FAA product.</p></div>
+
+    <div class="sec" id="detailSec" hidden><h2>Every lane level near you</h2>
+      <table id="detail"><thead><tr><th scope="col">Lane</th><th scope="col">Nearest</th><th scope="col">Status</th><th scope="col">Noise</th><th scope="col">Verdict</th></tr></thead><tbody></tbody></table>
+      <p class="note" style="margin-top:8px">Overhead: the lane centreline is within 40 m (the lane is 80 m wide). Nearby: inside the band where one aircraft of that tier would be above 55 dB, or within 150 m (about a block) when that band is narrower. Noise is the level at your address from one aircraft passing at the nearest point.</p>
+    </div>
+
+    <div class="sec"><h2>Map key</h2>
+      <div class="legend"><span><i style="background:var(--drone)"></i>Drone 250 / 350 ft</span><span><i style="background:var(--taxi)"></i>Air taxi 800 / 1,000 ft</span><span><i style="background:var(--personal)"></i>Personal 1,600 / 2,000 ft</span><span><i class="dash"></i>Not flyable here</span><span><i class="ring"></i>40 m lane half-width</span></div>
+    </div>
+    <p class="note" style="margin-top:14px">Only drone lanes are flyable under today's rules. Air-taxi and personal-flight lanes are a 2035 planning scenario drawn on today's map. Lanes from OpenStreetMap roads, statuses from FAA LAANC ceilings, Operating Categories and Class B airspace; crewed traffic from historical ADS-B.</p>
+  </aside>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script type="module" src="address.js"></script>
+</body>
+</html>
