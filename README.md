@@ -1,4 +1,4 @@
-# Corridor — Sky Lanes Seattle
+# Corridor — Sky Lanes
 
 Draw a delivery-drone route anywhere in greater Seattle (King, Pierce, Snohomish and Kitsap counties) and get a draft safety-case package: FAA operating category, census ground risk,
 Monte Carlo failure footprints, expected ground fatalities per flight hour, obstacles, power lines, LAANC ceilings,
