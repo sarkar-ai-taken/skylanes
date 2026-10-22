@@ -50,13 +50,21 @@ def b64(arr):
 
 
 # ---------------------------------------------------------------- population grid
+TILE = 80  # cells per tile side: 8 km at 100 m
+
+
 def build_grid():
+    """Population grid at grid_m, split into TILE×TILE tiles the app loads on demand.
+
+    Cell state: 0 land with census data, 1 water, 2 no data (outside every census block, e.g. across the border).
+    Every Washington block in the box is used, whatever its county, so land is never mistaken for water.
+    """
     zf = zipfile.ZipFile(RAW / "tabblock.zip")
     stem = next(n for n in zf.namelist() if n.endswith(".shp"))[:-4]
     rd = shapefile.Reader(shp=io.BytesIO(zf.read(stem + ".shp")), dbf=io.BytesIO(zf.read(stem + ".dbf")),
                           shx=io.BytesIO(zf.read(stem + ".shx")))
     fields = [f[0] for f in rd.fields[1:]]
-    i_geo, i_cty, i_pop, i_land = (fields.index(k) for k in ("GEOID20", "COUNTYFP20", "POP20", "ALAND20"))
+    i_geo, i_pop, i_land = (fields.index(k) for k in ("GEOID20", "POP20", "ALAND20"))
 
     jobs = {}
     with gzip.open(RAW / "wac.csv.gz", "rt") as fh:
@@ -65,56 +73,60 @@ def build_grid():
 
     geoms, recs = [], []
     for sr in rd.iterShapeRecords():
-        rec = sr.record
-        if rec[i_cty] not in METRO["county_fips"]:
-            continue
         x0, y0, x1, y1 = sr.shape.bbox
         if x1 < W or x0 > E or y1 < S or y0 > N:
             continue
+        rec = sr.record
         geoms.append(shape(sr.shape.__geo_interface__))
-        land = rec[i_land]
-        recs.append((rec[i_pop], jobs.get(rec[i_geo], 0), land))
+        recs.append((rec[i_pop], jobs.get(rec[i_geo], 0), rec[i_land]))
     tree = STRtree(geoms)
+    airspace = json.loads((OUT / "airspace.json").read_text())
+    cat_tree = STRtree([shape(f["geometry"]) for f in airspace["operating_categories"]])
+    fm_tree = STRtree([shape(f["geometry"]) for f in airspace["facility_map"]])
 
     cell = METRO["grid_m"]
-    nx = int((E - W) * M_LON // cell)
-    ny = int((N - S) * M_LAT // cell)
+    nx, ny = int((E - W) * M_LON // cell), int((N - S) * M_LAT // cell)
     dlon, dlat = cell / M_LON, cell / M_LAT
-    res, job, water = array("I", [0]) * (nx * ny), array("I", [0]) * (nx * ny), bytearray(nx * ny)
-    pts = [Point(W + (i + 0.5) * dlon, S + (j + 0.5) * dlat) for j in range(ny) for i in range(nx)]
-    hit = tree.query(pts, predicate="within")  # (point index, block index) pairs
-    seen = set()
-    for pi, gi in zip(*hit):
-        if pi in seen:
-            continue
-        seen.add(pi)
-        pop, jb, land = recs[gi]
-        if land <= 0:
-            water[pi] = 1
-            continue
-        res[pi] = round(pop / land * 1e6)
-        job[pi] = round(jb / land * 1e6)
-    for pi in range(nx * ny):
-        if pi not in seen:
-            water[pi] = 1  # outside every King County land block: Sound, lakes, or another county
-    blocks_used = len({int(g) for g in hit[1]})
-
-    # FAA operating category (highest polygon wins) and UAS facility map ceiling per cell; 0 / 65535 = none.
-    airspace = json.loads((OUT / "airspace.json").read_text())
-    faacat, ceiling = bytearray(nx * ny), array("H", [65535]) * (nx * ny)
-    for layer, apply in (("operating_categories", lambda pi, p: faacat.__setitem__(pi, max(faacat[pi], p["category"]))),
-                         ("facility_map", lambda pi, p: ceiling.__setitem__(pi, min(ceiling[pi], p["ceiling_ft"])))):
-        fs = airspace[layer]
-        t = STRtree([shape(f["geometry"]) for f in fs])
-        for pi, fi in zip(*t.query(pts, predicate="within")):
-            apply(int(pi), fs[int(fi)]["properties"])
-    out = {"west": W, "south": S, "cell_m": cell, "dlon": dlon, "dlat": dlat, "nx": nx, "ny": ny,
-           "dtype": "uint32le", "residents": b64(res), "jobs": b64(job), "water": base64.b64encode(bytes(water)).decode(),
-           "faacat": base64.b64encode(bytes(faacat)).decode(), "ceiling": b64(ceiling)}
+    tdir = OUT / "tiles"
+    tdir.mkdir(exist_ok=True)
+    for old in tdir.glob("*.json"):
+        old.unlink()
+    keys, residents, jobs_total, used = [], 0, 0, set()
+    for tj in range((ny + TILE - 1) // TILE):
+        for ti in range((nx + TILE - 1) // TILE):
+            i0, j0 = ti * TILE, tj * TILE
+            w, h = min(TILE, nx - i0), min(TILE, ny - j0)
+            pts = [Point(W + (i0 + i + 0.5) * dlon, S + (j0 + j + 0.5) * dlat) for j in range(h) for i in range(w)]
+            res, job, state = array("I", [0]) * (w * h), array("I", [0]) * (w * h), bytearray([2]) * (w * h)
+            for pi, gi in zip(*tree.query(pts, predicate="within")):
+                if state[pi] != 2:
+                    continue
+                pop, jb, land = recs[gi]
+                used.add(int(gi))
+                if land <= 0:
+                    state[pi] = 1
+                    continue
+                state[pi] = 0
+                res[pi], job[pi] = round(pop / land * 1e6), round(jb / land * 1e6)
+            if all(v == 1 for v in state):
+                continue  # open water: the app treats a missing listed-as-water tile as water
+            faacat, ceiling = bytearray(w * h), array("H", [65535]) * (w * h)
+            for pi, fi in zip(*cat_tree.query(pts, predicate="within")):
+                faacat[pi] = max(faacat[pi], airspace["operating_categories"][int(fi)]["properties"]["category"])
+            for pi, fi in zip(*fm_tree.query(pts, predicate="within")):
+                ceiling[pi] = min(ceiling[pi], airspace["facility_map"][int(fi)]["properties"]["ceiling_ft"])
+            key = f"{ti}_{tj}"
+            keys.append(key)
+            (tdir / f"{key}.json").write_text(json.dumps({
+                "ti": ti, "tj": tj, "w": w, "h": h, "residents": b64(res), "jobs": b64(job),
+                "state": base64.b64encode(bytes(state)).decode(), "faacat": base64.b64encode(bytes(faacat)).decode(), "ceiling": b64(ceiling)}))
+            residents += sum(res[k] for k in range(w * h) if state[k] == 0) * cell * cell / 1e6
+            jobs_total += sum(job[k] for k in range(w * h) if state[k] == 0) * cell * cell / 1e6
+    out = {"west": W, "south": S, "cell_m": cell, "dlon": dlon, "dlat": dlat, "nx": nx, "ny": ny, "tile": TILE,
+           "dtype": "uint32le", "tiles": keys}
     (OUT / "grid.json").write_text(json.dumps(out))
-    note("grid", "US Census 2020 TIGER/Line blocks (POP20) + LEHD LODES8 WAC 2021 (C000 jobs)", nx * ny,
-         blocks=blocks_used, total_residents=sum(r[0] for r in recs), total_jobs=sum(r[1] for r in recs),
-         cell_m=cell)
+    note("grid", "US Census 2020 TIGER/Line blocks (POP20) + LEHD LODES8 WAC 2021 (C000 jobs), tiled", nx * ny,
+         tiles=len(keys), blocks=len(used), residents_est=round(residents), jobs_est=round(jobs_total), cell_m=cell)
 
 
 # ---------------------------------------------------------------- obstacles
@@ -232,7 +244,7 @@ def build_sites():
         if key in seen:
             continue
         seen.add(key)
-        sites.append({"lon": round(lon, 5), "lat": round(lat, 5), "kind": kind, "name": t.get("name") or kind, "src": "OSM"})
+        sites.append({"lon": round(lon, 5), "lat": round(lat, 5), "kind": kind, "name": t.get("name") or f"unnamed {kind}", "src": "OSM"})
     for f in json.load(open(RAW / "airports.geojson"))["features"]:
         p = f["properties"]
         kind = {"HP": "heliport", "AD": "airport", "SP": "seaplane base"}.get(p["TYPE_CODE"], "airport")

@@ -1,10 +1,14 @@
 // Shared start-up for the ride and fleet pages: load the data layers and a dark 3D basemap.
-import { prepare } from './engine.js';
+import { prepare, ensureTiles } from './engine.js';
 
 export async function loadData(names = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings', 'lanes']) {
   const raw = Object.fromEntries(await Promise.all(names.map(async n => [n, await (await fetch(`data/${n}.json`)).json()])));
   return { raw, D: prepare(raw) };
 }
+
+/** Population-grid tiles a box needs, fetched once each. */
+export const loadTile = key => fetch(`data/tiles/${key}.json`).then(r => r.json());
+export const ensureBox = (D, box) => ensureTiles(D, box, loadTile);
 
 /** A dark MapLibre map with height-shaded 3D buildings; resolves once the style has loaded. */
 export function createMap(container, opts = {}) {

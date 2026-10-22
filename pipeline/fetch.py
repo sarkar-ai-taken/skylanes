@@ -64,15 +64,27 @@ def arcgis(name, service, where="1=1", fields="*"):
     print(f"     {len(feats)} features")
 
 
-def overpass(name, query):
+def overpass(name, query, split=2):
+    """Run an Overpass query over the bbox in split×split pieces (the public server times out on big areas) and merge."""
     out = RAW / f"{name}.json"
     if out.exists() and not FORCE:
         print(f"have {out.name}")
         return
-    print(f"get  {out.name} (Overpass; slow when the public server is busy)")
-    s, w, n, e = METRO["bbox"][1], METRO["bbox"][0], METRO["bbox"][3], METRO["bbox"][2]
-    body = urllib.parse.urlencode({"data": f"[out:json][timeout:180][bbox:{s},{w},{n},{e}];{query}"}).encode()
-    out.write_bytes(get("https://overpass-api.de/api/interpreter", data=body, tries=8))
+    print(f"get  {out.name} (Overpass, {split * split} pieces; slow when the public server is busy)")
+    w, s, e, n = METRO["bbox"]
+    seen, elements = set(), []
+    for a in range(split):
+        for b in range(split):
+            sw, ss = w + (e - w) * a / split, s + (n - s) * b / split
+            se, sn = w + (e - w) * (a + 1) / split, s + (n - s) * (b + 1) / split
+            body = urllib.parse.urlencode({"data": f"[out:json][timeout:300][bbox:{ss},{sw},{sn},{se}];{query}"}).encode()
+            for el in json.loads(get("https://overpass-api.de/api/interpreter", data=body, tries=8))["elements"]:
+                if (el["type"], el["id"]) not in seen:
+                    seen.add((el["type"], el["id"]))
+                    elements.append(el)
+            time.sleep(2)  # be polite to the shared server
+    out.write_text(json.dumps({"elements": elements}))
+    print(f"     {len(elements)} elements")
 
 
 def main():

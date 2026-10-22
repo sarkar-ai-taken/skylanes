@@ -1,8 +1,8 @@
 // Fleet page: run the warehouse simulation, play it back in 3D, and chart the results.
-import { loadData, createMap, nav } from './base.js';
+import { loadData, createMap, nav, ensureBox } from './base.js';
 import { FT } from './engine.js';
 import { createScene } from './scene3d.js';
-import { simulate, dronePos, REASONS, DEFAULT_PARAMS } from './fleet-sim.js';
+import { simulate, simBox, dronePos, REASONS, DEFAULT_PARAMS } from './fleet-sim.js';
 import { stadiumEvents } from './live.js';
 import { mountExpand } from './expand.js';
 
@@ -17,6 +17,11 @@ const WAREHOUSES = [
   { id: 'northgate', name: 'Northgate', at: [-122.3270, 47.7030] },
   { id: 'sodo', name: 'SoDo industrial', at: [-122.3335, 47.5745] },
   { id: 'georgetown', name: 'Georgetown', at: [-122.3200, 47.5470] },
+  { id: 'kent', name: 'Kent valley', at: [-122.2350, 47.4050] },
+  { id: 'redmond', name: 'Redmond', at: [-122.1400, 47.6650] },
+  { id: 'issaquah', name: 'Issaquah', at: [-122.0300, 47.5480] },
+  { id: 'everett', name: 'Everett', at: [-122.2050, 47.9200] },
+  { id: 'fife', name: 'Fife / Tacoma port', at: [-122.3570, 47.2400] },
 ];
 $('wh').innerHTML = WAREHOUSES.map(w => `<option value="${w.id}">${w.name}</option>`).join('') + '<option value="custom" hidden>Custom location</option>';
 
@@ -48,9 +53,10 @@ function schedule() { clearTimeout(timer); document.querySelector('.rail').class
 let sim = null, t = 0, playing = true, last = 0;
 function run() {
   document.querySelector('.rail').classList.add('busy');
-  setTimeout(() => { // let the dimmed state paint before the work
+  setTimeout(async () => { // let the dimmed state paint before the work
     const params = { ...DEFAULT_PARAMS, warehouse, fleet: +$('fleet').value, ordersPerHour: +$('rate').value, radiusKm: +$('radius').value,
       hours: +$('hours').value, aircraft: $('aircraft').value, altFt: +$('alt').value, promiseMin: +$('promise').value };
+    await ensureBox(D, simBox(D, params)); // census tiles under the service area
     sim = simulate(D, params, { events: games });
     t = 0; $('scrub').max = params.hours * 3600; $('scrub').value = 0;
     render();

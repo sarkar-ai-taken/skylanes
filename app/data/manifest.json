@@ -1,58 +1,59 @@
 {
- "metro": "Seattle",
+ "metro": "Greater Seattle",
  "bbox": [
-  -122.46,
-  47.48,
-  -122.22,
-  47.74
+  -122.85,
+  47.05,
+  -121.75,
+  48.05
  ],
  "built": "2026-10-21",
  "layers": {
   "obstacles": {
    "source": "FAA Digital Obstacle File (daily) + OpenStreetMap",
-   "count": 969,
-   "faa_dof": 618,
-   "osm": 351
+   "count": 3950,
+   "faa_dof": 2062,
+   "osm": 1888
   },
   "powerlines": {
    "source": "OpenStreetMap power=line (transmission; distribution lines largely unmapped)",
-   "count": 142
+   "count": 2097
   },
   "buildings": {
    "source": "OpenStreetMap building and building:part footprints, height >= 20 m or >= 6 levels",
-   "count": 1593
+   "count": 2113
   },
   "sites": {
    "source": "OpenStreetMap amenities + FAA ADDS airports/heliports/stadiums",
-   "count": 386
+   "count": 1907
   },
   "facility_map": {
    "source": "FAA UAS Facility Map (LAANC ceilings)",
-   "count": 394
+   "count": 2836
   },
   "surface": {
    "source": "FAA ADDS Class airspace, surface areas",
-   "count": 5
+   "count": 10
   },
   "class_b": {
    "source": "FAA ADDS Class B shelves (all floors)",
-   "count": 7
+   "count": 19
   },
   "op_categories": {
    "source": "FAA ADDS Operating Categories Map",
-   "count": 10
+   "count": 212
   },
   "grid": {
-   "source": "US Census 2020 TIGER/Line blocks (POP20) + LEHD LODES8 WAC 2021 (C000 jobs)",
-   "count": 51660,
-   "blocks": 9790,
-   "total_residents": 872772,
-   "total_jobs": 639508,
+   "source": "US Census 2020 TIGER/Line blocks (POP20) + LEHD LODES8 WAC 2021 (C000 jobs), tiled",
+   "count": 912730,
+   "tiles": 154,
+   "blocks": 45042,
+   "residents_est": 4127893,
+   "jobs_est": 1991587,
    "cell_m": 100
   },
   "lanes": {
    "source": "OpenStreetMap highway=motorway|trunk|primary|secondary, scored with app/engine.js",
-   "count": 4573
+   "count": 24603
   }
  }
 }

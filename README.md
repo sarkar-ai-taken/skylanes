@@ -1,6 +1,6 @@
 # Corridor — Sky Lanes Seattle
 
-Draw a delivery-drone route over Seattle and get a draft safety-case package: FAA operating category, census ground risk,
+Draw a delivery-drone route anywhere in greater Seattle (King, Pierce, Snohomish and Kitsap counties) and get a draft safety-case package: FAA operating category, census ground risk,
 Monte Carlo failure footprints, expected ground fatalities per flight hour, obstacles, power lines, LAANC ceilings,
 heliports and stadium TFRs, noise, and an area of intended flight. All on real public data.
 
@@ -45,6 +45,13 @@ Set up the pipeline once: `python3 -m venv .venv && .venv/bin/pip install shapel
 Each page has an "Expand beyond Seattle" sign-up box. It stays closed until `app/config.js` names an endpoint
 (Formspree or a Google Form).
 
+## Coverage
+
+The data covers Central Puget Sound: Marysville to Puyallup, Bremerton to North Bend (about 9,000 km², 4.1 million
+residents). The population grid is split into 8 km tiles (`app/data/tiles/`) that load only where you look or fly, so
+coverage can grow to all of Washington by widening the box in `pipeline/metro.py` and rebuilding. A route over
+ground without data is flagged as outside coverage, never scored as empty.
+
 ## Prototype it yourself, free
 
 Everything here runs on free public data and free hosting.
@@ -53,7 +60,7 @@ Everything here runs on free public data and free hosting.
 2. Push to `main`. The workflow runs the tests and publishes `app/` to `https://<you>.github.io/<repo>/`.
 3. Change the engine (`app/engine.js`), the sample routes (`app/routes.js`) or the package text (`app/package.js`) and push again.
 
-To try another US metro, add an entry to `pipeline/metro.py` (bbox, state, county FIPS), switch `METRO` to it,
+To try another region, add an entry to `pipeline/metro.py` (bbox and state), switch `METRO` to it,
 run `npm run build-data`, commit `app/data/`, and update the initial map bounds in `app/ui.js`.
 
 ## Layout

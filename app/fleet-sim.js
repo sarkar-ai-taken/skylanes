@@ -19,18 +19,26 @@ export const DEFAULT_PARAMS = {
   loadS: 90, dropS: 45, turnS: 150, climbMs: 3, promiseMin: 60, seed: 11, startHour: 10,
 };
 
-/** Home locations near the warehouse, weighted by census residents (the people who order to their door). */
+/** Home locations near the warehouse, weighted by census residents (the people who order to their door). Needs simBox's tiles loaded. */
 function homes(D, W, radiusM) {
   const g = D.grid, c = D.proj(W), cells = [], cum = [];
   let total = 0;
-  for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) {
-    const k = j * g.nx + i;
-    if (g.water[k] || !g.residents[k]) continue;
-    const ll = [g.west + (i + 0.5) * g.dlon, g.south + (j + 0.5) * g.dlat], xy = D.proj(ll);
+  const tiles = [...g.loaded.values()].sort((a, b) => a.tj - b.tj || a.ti - b.ti); // fixed order keeps runs deterministic
+  for (const t of tiles) for (let j = 0; j < t.h; j++) for (let i = 0; i < t.w; i++) {
+    const k = j * t.w + i;
+    if (t.state[k] !== 0 || !t.residents[k]) continue;
+    const ll = [g.west + (t.ti * g.tile + i + 0.5) * g.dlon, g.south + (t.tj * g.tile + j + 0.5) * g.dlat], xy = D.proj(ll);
     if (Math.hypot(xy[0] - c[0], xy[1] - c[1]) > radiusM) continue;
-    total += g.residents[k]; cells.push(ll); cum.push(total);
+    total += t.residents[k]; cells.push(ll); cum.push(total);
   }
   return { cells, cum, total };
+}
+
+/** The box whose grid tiles a simulation needs: the service radius plus room for reroutes and footprints. */
+export function simBox(D, params = {}) {
+  const p = { ...DEFAULT_PARAMS, ...params }, c = D.proj(p.warehouse), r = p.radiusKm * 1000 + 1500;
+  const [w, s] = D.unproj([c[0] - r, c[1] - r]), [e, n] = D.unproj([c[0] + r, c[1] + r]);
+  return [w, s, e, n];
 }
 
 export function simulate(D, params = {}, { events = [] } = {}) {

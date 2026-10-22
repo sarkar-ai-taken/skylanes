@@ -48,7 +48,7 @@ export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest
   const mLon = 111320 * Math.cos(lat0 * Math.PI / 180), mLat = 110574;
   const proj = ([lon, lat]) => [(lon - lon0) * mLon, (lat - lat0) * mLat];
   const unproj = ([x, y]) => [x / mLon + lon0, y / mLat + lat0];
-  const g = { ...grid, residents: decode(grid.residents, Uint32Array), jobs: decode(grid.jobs, Uint32Array), water: decode(grid.water, Uint8Array), faacat: decode(grid.faacat, Uint8Array), ceiling: decode(grid.ceiling, Uint16Array) };
+  const g = { ...grid, loaded: new Map(), listed: new Set(grid.tiles) }; // tiles arrive through addTile / ensureTiles
   const projPoly = geom => (geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates).map(p => p.map(r => r.map(proj)));
   const polys = fs => fs.map(f => ({ props: f.properties, rings: projPoly(f.geometry), bbox: bboxOf(projPoly(f.geometry)) }));
   return {
@@ -124,38 +124,74 @@ function segDist(p, a, b) {
 }
 
 // ---------- Point queries ----------
-function cellIndex(D, xy) {
-  const [lon, lat] = D.unproj(xy), g = D.grid;
-  const i = Math.floor((lon - g.west) / g.dlon), j = Math.floor((lat - g.south) / g.dlat);
-  return i < 0 || j < 0 || i >= g.nx || j >= g.ny ? -1 : j * g.nx + i;
+// ---------- The tiled population grid ----------
+// Cell state: 0 land with census data, 1 water, 2 no data, 3 tile not loaded yet. Tiles absent from the index are open water.
+const WATER = { state: 1 }, NODATA = { state: 2 }, UNLOADED = { state: 3 };
+
+/** Decode one tile file and make it available to every query. */
+export function addTile(D, t) {
+  D.grid.loaded.set(`${t.ti}_${t.tj}`, { ...t, residents: decode(t.residents, Uint32Array), jobs: decode(t.jobs, Uint32Array),
+    state: decode(t.state, Uint8Array), faacat: decode(t.faacat, Uint8Array), ceiling: decode(t.ceiling, Uint16Array) });
 }
+/** Tile keys covering a [west, south, east, north] box that are listed but not loaded. */
+export function missingTiles(D, [w, s, e, n]) {
+  const g = D.grid, T = g.tile, out = [];
+  const i0 = Math.max(0, Math.floor((w - g.west) / g.dlon / T)), i1 = Math.min(Math.ceil(g.nx / T) - 1, Math.floor((e - g.west) / g.dlon / T));
+  const j0 = Math.max(0, Math.floor((s - g.south) / g.dlat / T)), j1 = Math.min(Math.ceil(g.ny / T) - 1, Math.floor((n - g.south) / g.dlat / T));
+  for (let tj = j0; tj <= j1; tj++) for (let ti = i0; ti <= i1; ti++) { const k = `${ti}_${tj}`; if (g.listed.has(k) && !g.loaded.has(k)) out.push(k); }
+  return out;
+}
+/** Load every tile a box needs. loader(key) resolves to the tile's JSON. */
+export async function ensureTiles(D, box, loader) {
+  const keys = missingTiles(D, box);
+  (await Promise.all(keys.map(loader))).forEach(t => addTile(D, t));
+  return keys.length;
+}
+/** Box around a route, padded by padM metres (failure footprints land beyond the line). */
+export function routeBox(D, route, padM = 1500) {
+  const xy = route.map(p => D.proj(p)), xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
+  const [w, s] = D.unproj([Math.min(...xs) - padM, Math.min(...ys) - padM]), [e, n] = D.unproj([Math.max(...xs) + padM, Math.max(...ys) + padM]);
+  return [w, s, e, n];
+}
+
+function cellAt(D, i, j) {
+  const g = D.grid;
+  if (i < 0 || j < 0 || i >= g.nx || j >= g.ny) return NODATA;
+  const ti = Math.floor(i / g.tile), tj = Math.floor(j / g.tile), key = ti + '_' + tj, t = g.loaded.get(key);
+  if (!t) return g.listed.has(key) ? UNLOADED : WATER;
+  const k = (j - tj * g.tile) * t.w + (i - ti * g.tile);
+  return { t, k, state: t.state[k] };
+}
+function cellOf(D, xy) {
+  const [lon, lat] = D.unproj(xy), g = D.grid;
+  return cellAt(D, Math.floor((lon - g.west) / g.dlon), Math.floor((lat - g.south) / g.dlat));
+}
+/** 'ok' where the grid has census data, 'water', 'nodata' outside it, 'unloaded' when its tile is not loaded. */
+export const coverage = (D, xy) => ['ok', 'water', 'nodata', 'unloaded'][cellOf(D, xy).state];
 
 /** People per km² on the ground at xy: 3×3-cell (300 m) mean of the 100 m grid, so one tall block does not set the category. */
 export function density(D, xy, tod = 'day') {
-  const g = D.grid, m = TOD[tod], k = cellIndex(D, xy);
-  if (k < 0) return 0;
+  const g = D.grid, m = TOD[tod], [lon, lat] = D.unproj(xy);
+  const i0 = Math.floor((lon - g.west) / g.dlon), j0 = Math.floor((lat - g.south) / g.dlat);
   let sum = 0, n = 0;
-  const i0 = k % g.nx, j0 = (k - i0) / g.nx;
   for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
-    const i = i0 + di, j = j0 + dj;
-    if (i < 0 || j < 0 || i >= g.nx || j >= g.ny) continue;
-    const q = j * g.nx + i;
-    sum += g.water[q] ? 0 : m.res * g.residents[q] + m.jobs * g.jobs[q];
-    n++;
+    const c = cellAt(D, i0 + di, j0 + dj);
+    if (c.state === 0) { sum += m.res * c.t.residents[c.k] + m.jobs * c.t.jobs[c.k]; n++; }
+    else if (c.state === 1) n++; // water counts as empty; missing data does not count at all
   }
-  let v = sum / n;
+  let v = n ? sum / n : 0;
   if (m.crowd) for (const s of D.sites) if (s.kind === 'stadium' && s.tfr) {
     const d = hyp(xy, s.xy);
     if (d < CROWD_R) v += CROWD / (Math.PI * (CROWD_R / 1000) ** 2) * (1 - d / CROWD_R);
   }
   return v;
 }
-export const isWater = (D, xy) => { const k = cellIndex(D, xy); return k < 0 || D.grid.water[k] === 1; };
+export const isWater = (D, xy) => cellOf(D, xy).state === 1;
 
 /** FAA Operating Categories Map category at xy (rasterized to the grid; highest polygon wins), or null outside its coverage. */
-export function faaCategory(D, xy) { const k = cellIndex(D, xy); return k < 0 || !D.grid.faacat[k] ? null : D.grid.faacat[k]; }
+export function faaCategory(D, xy) { const c = cellOf(D, xy); return c.t && c.t.faacat[c.k] ? c.t.faacat[c.k] : null; }
 /** UAS facility map ceiling (ft AGL) at xy, or null outside controlled airspace grids. */
-export function facilityCeiling(D, xy) { const k = cellIndex(D, xy); return k < 0 || D.grid.ceiling[k] === 65535 ? null : D.grid.ceiling[k]; }
+export function facilityCeiling(D, xy) { const c = cellOf(D, xy); return c.t && c.t.ceiling[c.k] !== 65535 ? c.t.ceiling[c.k] : null; }
 
 // ---------- Physics ----------
 /** Monte Carlo failure landings around xy. Returns [x, y] points in metres. */
@@ -214,8 +250,9 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   const tfrPolys = (tfrs || []).filter(t => t.ring?.length > 3).map(t => { const rings = [[t.ring.map(D.proj)]]; return { t, rings, bbox: bboxOf(rings) }; });
   const sampleAt = (xy, along, alt) => {
     const d = density(D, xy, tod), fc = faaCategory(D, xy);
-    return { xy, ll: D.unproj(xy), along, alt, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: isWater(D, xy),
-      blocked: isBlocked(D, xy, alt, o) };
+    const cov = coverage(D, xy);
+    return { xy, ll: D.unproj(xy), along, alt, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: cov === 'water',
+      blocked: isBlocked(D, xy, alt, o), noData: cov === 'nodata' || cov === 'unloaded' };
   };
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1], L = hyp(a, b), steps = Math.max(1, Math.ceil(L / o.sampleM));
@@ -277,6 +314,7 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
     hiFrac: foot.length ? hi / foot.length : 0, waterFrac: foot.length ? waterLandings / foot.length : 0, meanUnder, ecPerFh, ecPerFlight: ecPerFh * hours,
     obstacles: [...obst.values()].sort((a, b) => b.agl_ft - a.agl_ft), buildings: [...bld.values()].sort((a, b) => b.h_ft - a.h_ft),
     blockedShare: samples.filter(s => s.blocked).length / samples.length,
+    noDataShare: samples.filter(s => s.noData).length / samples.length,
     powerlines: [...lines.keys()].map(pl => pl.props),
     airspace: [...air.entries()].map(([name, v]) => ({ name, ...v })), noise, noiseSites: [...near.entries()].map(([s, db]) => ({ name: s.name, kind: s.kind, db })).sort((a, b) => b.db - a.db),
     laancShare: laanc.length / samples.length, minCeiling: laanc.length ? Math.min(...laanc.map(s => s.ceiling)) : null, overCeilingShare: overCeiling.length / samples.length,
@@ -398,10 +436,11 @@ const fmtTime = d => d.toLocaleTimeString('en-US', { timeZone: TZ, hour: 'numeri
 
 export function findings(r) {
   const f = [];
+  if (r.noDataShare > 0) f.push(['crit', `${Math.round(r.noDataShare * 100)}% of the route is outside the data coverage. Ground risk there is unknown, not zero.`]);
   const pct = x => Math.round(x * 100) + '%';
   const share = c => pct(r.samples.filter(s => s.c >= c).length / r.samples.length);
   if (r.maxCat === 5) f.push(['crit', `${share(5)} of the route crosses Category 5 ground, the densest class on the FAA operating categories map. Expect the heaviest safety case; reroute if the destination allows.`]);
-  else if (r.maxCat === 4) f.push(['warn', `${share(4)} of the route crosses Category 4 ground on the FAA operating categories map. Most of residential Seattle is Category 4, so this is the normal case for urban delivery; the safety case must carry it.`]);
+  else if (r.maxCat === 4) f.push(['warn', `${share(4)} of the route crosses Category 4 ground on the FAA operating categories map. About 80% of the region's residential neighbourhoods are Category 4, so this is the normal case for urban delivery; the safety case must carry it.`]);
   else if (r.maxCat === 3) f.push(['warn', 'Category 3 segments present.']);
   else f.push(['good', 'Entire route stays in Category 1–2 ground.']);
   const through = r.buildings.filter(b => b.dm < r.opt.buildingHitM && b.h_ft >= b.alt - r.opt.obstacleVertFt);

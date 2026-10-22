@@ -1,8 +1,9 @@
 // Map, controls and rail. All scoring lives in engine.js; all document text in package.js.
-import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, MAX_ALT_FT } from './engine.js';
+import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, missingTiles, routeBox, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, MAX_ALT_FT } from './engine.js';
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
 import { createScene } from './scene3d.js';
+import { ensureBox } from './base.js';
 import { windAloft, windAt, stadiumEvents, loadTfrs } from './live.js';
 
 const $ = id => document.getElementById(id);
@@ -33,32 +34,55 @@ const map = new maplibregl.Map({
 window.corridorMap = map; // handle for debugging and tests
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 
-function densityImage(tod) {
-  const g = D.grid, cv = document.createElement('canvas'); cv.width = g.nx; cv.height = g.ny;
-  const ctx = cv.getContext('2d'), img = ctx.createImageData(g.nx, g.ny), m = TOD[tod];
+// Population shading, one image per loaded grid tile.
+function densityImage(t, tod) {
+  const cv = document.createElement('canvas'); cv.width = t.w; cv.height = t.h;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(t.w, t.h), m = TOD[tod];
   const cols = [null, [47, 143, 78], [127, 191, 106], [199, 129, 26], [216, 98, 42], [194, 59, 46]];
-  for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) {
-    const k = j * g.nx + i, o = ((g.ny - 1 - j) * g.nx + i) * 4;
-    if (g.water[k]) continue;
-    const d = m.res * g.residents[k] + m.jobs * g.jobs[k], c = catFromDensity(d), col = cols[c];
-    img.data.set([...col, c <= 2 ? 0 : c === 3 ? 50 : c === 4 ? 80 : 120], o);
+  for (let j = 0; j < t.h; j++) for (let i = 0; i < t.w; i++) {
+    const k = j * t.w + i, o = ((t.h - 1 - j) * t.w + i) * 4;
+    if (t.state[k] !== 0) continue;
+    const c = catFromDensity(m.res * t.residents[k] + m.jobs * t.jobs[k]);
+    img.data.set([...cols[c], c <= 2 ? 0 : c === 3 ? 50 : c === 4 ? 80 : 120], o);
   }
   ctx.putImageData(img, 0, 0);
   return cv.toDataURL();
 }
-const gridCorners = () => { const g = D.grid, e = g.west + g.nx * g.dlon, n = g.south + g.ny * g.dlat; return [[g.west, n], [e, n], [e, g.south], [g.west, g.south]]; };
+function tileCorners(t) {
+  const g = D.grid, w = g.west + t.ti * g.tile * g.dlon, s = g.south + t.tj * g.tile * g.dlat, e = w + t.w * g.dlon, n = s + t.h * g.dlat;
+  return [[w, n], [e, n], [e, s], [w, s]];
+}
+const densityIds = new Set();
+let densityTod = 'day', densityOpacity = 0.12, firstSymbol;
+function refreshDensity(tod = densityTod) {
+  const changed = tod !== densityTod; densityTod = tod;
+  const visible = document.querySelector('[data-layer="density"]').checked ? 'visible' : 'none';
+  for (const [key, t] of D.grid.loaded) {
+    const id = 'dens-' + key;
+    if (!map.getSource(id)) {
+      map.addSource(id, { type: 'image', url: densityImage(t, tod), coordinates: tileCorners(t) });
+      map.addLayer({ id, type: 'raster', source: id, layout: { visibility: visible }, paint: { 'raster-opacity': densityOpacity, 'raster-resampling': 'nearest' } }, firstSymbol);
+      densityIds.add(id);
+    } else if (changed) map.getSource(id).updateImage({ url: densityImage(t, tod), coordinates: tileCorners(t) });
+  }
+}
+// Load the tiles in view once zoomed in far enough that the shading is readable.
+function loadViewTiles() {
+  if (map.getZoom() < 11) return;
+  const b = map.getBounds();
+  ensureBox(D, [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]).then(n => n && refreshDensity());
+}
 // metres → pixels at every zoom: width doubles per zoom level
 const metresWidth = m => ['interpolate', ['exponential', 2], ['zoom'], 10, m / (156543.03 * Math.cos(47.62 * Math.PI / 180) / 2 ** 10), 20, m / (156543.03 * Math.cos(47.62 * Math.PI / 180) / 2 ** 20)];
 
 const LAYERS = {
-  density: ['density'], faacat: ['faacat-fill', 'faacat-line'], laanc: ['laanc-line', 'laanc-label'], obstacles: ['obstacles'],
+  get density() { return [...densityIds]; }, faacat: ['faacat-fill', 'faacat-line'], laanc: ['laanc-line', 'laanc-label'], obstacles: ['obstacles'],
   power: ['power'], sites: ['sites'], foot: ['foot'], noise: ['noise'], area: ['area-fill', 'area-line'],
 };
 
 map.on('load', () => {
-  const firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol')?.id;
-  map.addSource('density', { type: 'image', url: densityImage('day'), coordinates: gridCorners() });
-  map.addLayer({ id: 'density', type: 'raster', source: 'density', paint: { 'raster-opacity': 0.75, 'raster-resampling': 'nearest' } }, firstSymbol);
+  firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol')?.id;
+  map.on('moveend', loadViewTiles);
   map.addSource('faacat', { type: 'geojson', data: fc(raw.airspace.operating_categories.slice().sort((a, b) => a.properties.category - b.properties.category)) });
   const catColor = ['match', ['get', 'category'], 2, css('--c2'), 3, css('--warn'), 4, css('--c4'), 5, css('--crit'), '#888'];
   map.addLayer({ id: 'faacat-fill', type: 'fill', source: 'faacat', paint: { 'fill-color': catColor, 'fill-opacity': 0.12 }, layout: { visibility: 'none' } }, firstSymbol);
@@ -254,7 +278,8 @@ function setView(v) {
   $('view').textContent = v === '3d' ? 'Plan view' : '3D sky';
   if (v === '3d') for (const id of FLAT) map.setLayoutProperty(id, 'visibility', 'none');
   else document.querySelectorAll('[data-layer]').forEach(applyLayer);
-  map.setPaintProperty('density', 'raster-opacity', v === '3d' ? 0.12 : 0.75);
+  densityOpacity = v === '3d' ? 0.12 : 0.75;
+  for (const id of densityIds) map.setPaintProperty(id, 'raster-opacity', densityOpacity);
   scene.setVisible(v === '3d');
   applyNetwork();
   map.easeTo(v === '3d' ? { pitch: 60, bearing: -20, duration: 800 } : { pitch: 0, bearing: 0, duration: 800 });
@@ -281,10 +306,14 @@ function applyNetwork() {
 $('tierRows').addEventListener('change', applyNetwork);
 
 // ---------- Scoring → map + rail + doc ----------
-let lastTod = 'day';
 function score() {
   const tod = $('tod').value;
-  if (tod !== lastTod && map.getSource('density')) { map.getSource('density').updateImage({ url: densityImage(tod), coordinates: gridCorners() }); lastTod = tod; }
+  // A route needs its grid tiles (plus room for failure footprints) before it can be scored.
+  if (state.route.length > 1 && missingTiles(D, routeBox(D, state.route)).length) {
+    $('hint').textContent = 'Loading population data for this area…';
+    return ensureBox(D, routeBox(D, state.route)).then(() => { refreshDensity(); score(); });
+  }
+  if (tod !== densityTod) refreshDensity(tod);
   state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod, events: live.events, tfrs: live.tfr?.tfrs || [], when: new Date() }) : null;
   drawMap(); renderRail(); renderDoc(); saveHash();
   $('hint').textContent = state.route.length ? state.finished ? 'Route complete. Click a waypoint to set its altitude, or the map to start a new route.' : 'Keep clicking. Double-click to finish.' : 'Click to place waypoints. Double-click to finish.';

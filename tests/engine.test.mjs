@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { prepare, scoreRoute, findings, verdict, density, faaCategory, isWater } from '../app/engine.js';
+import { prepare, addTile, scoreRoute, findings, verdict, density, faaCategory, isWater } from '../app/engine.js';
 import { ROUTES } from '../app/routes.js';
 
 const load = n => JSON.parse(readFileSync(new URL(`../app/data/${n}.json`, import.meta.url)));
 const D = prepare(Object.fromEntries(['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings'].map(n => [n, load(n)])));
+for (const k of D.grid.listed) addTile(D, JSON.parse(readFileSync(new URL(`../app/data/tiles/${k}.json`, import.meta.url))));
 const route = id => ROUTES.find(r => r.id === id).path;
 
 test('water reads as water and downtown reads dense', () => {
@@ -194,4 +195,18 @@ test('a smaller fleet waits longer and refuses more for being busy', async () =>
   const big = simulate(D, { hours: 2, ordersPerHour: 90, fleet: 20 }).metrics, small = simulate(D, { hours: 2, ordersPerHour: 90, fleet: 3 }).metrics;
   assert.ok(small.medianMin > big.medianMin);
   assert.ok((small.refused.busy || 0) > (big.refused.busy || 0));
+});
+
+test('a route over tiles that are not loaded is flagged as outside coverage, never scored as empty ground', () => {
+  const bare = prepare(Object.fromEntries(['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings'].map(n => [n, load(n)])));
+  const r = scoreRoute(bare, route('magnolia'), {});
+  assert.equal(r.noDataShare, 1);
+  assert.ok(findings(r).some(([s, t]) => s === 'crit' && t.includes('outside the data coverage')));
+  // the same route with its tiles loaded has full coverage
+  assert.equal(scoreRoute(D, route('magnolia'), {}).noDataShare, 0);
+});
+
+test('the region reaches the Eastside: Bellevue and Issaquah have census data', () => {
+  assert.ok(density(D, D.proj([-122.2000, 47.6150]), 'day') > 5000, 'downtown Bellevue');
+  assert.ok(density(D, D.proj([-122.0350, 47.5400]), 'night') > 200, 'Issaquah');
 });

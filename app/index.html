@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Corridor Seattle</title>
+<title>Corridor Greater Seattle</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath d=%27M2 13 L7 6 L10 9 L14 3%27 fill=%27none%27 stroke=%27%230d6b5a%27 stroke-width=%272.5%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
@@ -95,7 +95,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 </head>
 <body>
 <header>
-  <div><div class="eyebrow">Corridor · delivery route safety case · Seattle</div><h1>Draw the route, file the waiver</h1></div>
+  <div><div class="eyebrow">Corridor · delivery route safety case · Greater Seattle</div><h1>Draw the route, file the waiver</h1></div>
   <nav class="pages"><a href="index.html" aria-current="page">Plan a route</a><a href="ride.html">Ride</a><a href="fleet.html">Fleet</a></nav>
   <div class="note" id="dataNote">Loading public data…</div>
 </header>
@@ -103,7 +103,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 <div class="wrap">
   <div>
     <div class="mapbox">
-      <div id="map" role="application" aria-label="Seattle route map"></div>
+      <div id="map" role="application" aria-label="Greater Seattle route map"></div>
       <div class="loading" id="loading">Loading census, FAA and OSM layers…</div>
       <div class="hint" id="hint">Click to place waypoints. Double-click to finish.</div>
       <details class="skypanel" id="skypanel" open>
@@ -111,7 +111,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
         <div id="tierRows"></div>
         <div class="sp-key"><span><i style="background:#ef6b5c"></i>blocked / Cat 5</span><span><i style="background:#eb8c50"></i>over ceiling</span><span><i style="background:#b08cff"></i>needs ATC</span></div>
         <div class="sp-traffic"><label for="traffic">Traffic</label>
-          <select id="traffic" autocomplete="off"><option value="0">Off</option><option value="10">10%</option><option value="25" selected>25%</option><option value="50">50%</option><option value="100">100%</option></select>
+          <select id="traffic" autocomplete="off"><option value="0">Off</option><option value="10" selected>10%</option><option value="25">25%</option><option value="50">50%</option><option value="100">100%</option></select>
           <span class="note" id="vehCount"></span></div>
       </details>
       <div class="legend legend3d">

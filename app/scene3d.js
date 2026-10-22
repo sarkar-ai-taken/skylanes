@@ -52,7 +52,7 @@ export function createScene(map, D, raw, { consumer = false } = {}) {
     for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
     return { ...ln, p3: ln.p.map(q => [q[0], q[1], z]), xy, cum, len: cum[cum.length - 1], z, status: LANE_STATUS[ln.s], rev: TIERS[ln.t].levels.indexOf(ln.l) === 1 };
   });
-  const net = { on: true, tiers: TIERS.map(() => true), pct: 25, shown: [], vehicles: [] };
+  const net = { on: true, tiers: TIERS.map(() => true), pct: 10, shown: [], vehicles: [] };
   function refreshNet() {
     net.shown = net.on ? lanes.filter(ln => net.tiers[ln.t]) : [];
     // Traffic fills open lanes only: pct of capacity, placed by length, deterministic per setting.
