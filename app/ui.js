@@ -1,10 +1,10 @@
 // Map, controls and rail. All scoring lives in engine.js; all document text in package.js.
-import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, missingTiles, routeBox, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, MAX_ALT_FT } from './engine.js';
+import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, missingTiles, routeBox, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, climateWind, rateText, MAX_ALT_FT } from './engine.js';
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
 import { createScene } from './scene3d.js';
 import { ensureBox } from './base.js';
-import { windAloft, windAt, stadiumEvents, loadTfrs } from './live.js';
+import { windAloft, windAt, stadiumEvents, loadTfrs, loadNotams } from './live.js';
 
 const $ = id => document.getElementById(id);
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -12,11 +12,14 @@ const dark = () => document.documentElement.dataset.theme === 'dark' || (documen
 const fc = features => ({ type: 'FeatureCollection', features });
 const pt = (c, p = {}) => ({ type: 'Feature', properties: p, geometry: { type: 'Point', coordinates: c } });
 
-const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings', 'lanes'];
-const raw = Object.fromEntries(await Promise.all(files.map(async n => [n, await (await fetch(`data/${n}.json`)).json()])));
+const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings', 'lanes'], optional = ['traffic', 'wind'];
+const raw = Object.fromEntries(await Promise.all([
+  ...files.map(async n => [n, await (await fetch(`data/${n}.json`)).json()]),
+  ...optional.map(async n => [n, await fetch(`data/${n}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null)]),
+]));
 const D = prepare(raw);
 const M = raw.manifest;
-$('dataNote').textContent = `Real data: census 2020 blocks, LEHD jobs, FAA obstacle file, UAS facility map, FAA operating categories, OSM. Built ${M.built}.`;
+$('dataNote').textContent = `Real data: census 2020 blocks, LEHD jobs, FAA obstacle file, UAS facility map, FAA operating categories, OSM land use${M.layers.heights ? ', USGS 3DEP lidar' : ''}${raw.traffic ? ', OpenSky ADS-B' : ''}${raw.wind ? ', NOAA HRRR wind' : ''}. Built ${M.built}.`;
 
 // ---------- Controls ----------
 $('route').innerHTML = '<option value="">Sample routes…</option>' + ROUTES.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
@@ -66,17 +69,65 @@ function refreshDensity(tod = densityTod) {
     } else if (changed) map.getSource(id).updateImage({ url: densityImage(t, tod), coordinates: tileCorners(t) });
   }
 }
+// Lidar surface height per tile: transparent below 15 m, then green (trees) or white (structures) by height.
+function surfaceImage(t) {
+  const W2 = t.w * 2, H2 = t.h * 2, cv = document.createElement('canvas'); cv.width = W2; cv.height = H2;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(W2, H2);
+  for (let j = 0; j < H2; j++) for (let i = 0; i < W2; i++) {
+    const k = j * W2 + i, v = t.surf[k]; if (v === 255 || v * 4 < 50) continue;
+    const a = Math.min(220, 60 + v * 4 * 0.5), o = ((H2 - 1 - j) * W2 + i) * 4;
+    img.data.set(t.surfkind[k] === 2 ? [96, 200, 120, a] : [235, 238, 240, a], o);
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv.toDataURL();
+}
+const surfaceIds = new Set();
+function refreshSurface() {
+  const visible = document.querySelector('[data-layer="surface"]').checked && view !== '3d' ? 'visible' : 'none';
+  for (const [key, t] of D.grid.loaded) {
+    const id = 'surf-' + key;
+    if (!t.surf || map.getSource(id)) continue;
+    map.addSource(id, { type: 'image', url: surfaceImage(t), coordinates: tileCorners(t) });
+    map.addLayer({ id, type: 'raster', source: id, layout: { visibility: visible }, paint: { 'raster-opacity': 0.8, 'raster-resampling': 'nearest' } }, firstSymbol);
+    surfaceIds.add(id);
+  }
+}
+// Crewed traffic in the altitude band of the selected route level, busiest 10% (orange) and 1% (red) of cells.
+function trafficImage(band) {
+  const T = D.traffic, cv = document.createElement('canvas'); cv.width = T.nx; cv.height = T.ny;
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(T.nx, T.ny), [, p90, p99] = T.pct[band];
+  for (let j = 0; j < T.ny; j++) for (let i = 0; i < T.nx; i++) {
+    const v = T.density[band][j * T.nx + i]; if (v <= p90) continue; // only the busiest tenth of the region
+    img.data.set(v > p99 ? [239, 107, 92, 150] : [235, 140, 80, 50], ((T.ny - 1 - j) * T.nx + i) * 4);
+  }
+  ctx.putImageData(img, 0, 0);
+  return cv.toDataURL();
+}
+let trafficBand = -1;
+function refreshTraffic() {
+  if (!D.traffic || !map.getSource) return;
+  const alt = +$('alt').value, band = D.traffic.bands_ft.findIndex((b, i) => alt >= b && alt < D.traffic.bands_ft[i + 1]);
+  if (band < 0 || band === trafficBand) return;
+  trafficBand = band;
+  const T = D.traffic, coords = [[T.west, T.south + T.ny * T.dlat], [T.west + T.nx * T.dlon, T.south + T.ny * T.dlat], [T.west + T.nx * T.dlon, T.south], [T.west, T.south]];
+  // not 'traffic': the deck.gl scene owns that id for the sky-lane vehicles
+  if (map.getSource('crewed')) map.getSource('crewed').updateImage({ url: trafficImage(band), coordinates: coords });
+  else {
+    map.addSource('crewed', { type: 'image', url: trafficImage(band), coordinates: coords });
+    map.addLayer({ id: 'crewed', type: 'raster', source: 'crewed', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.75, 'raster-resampling': 'linear' } }, firstSymbol);
+  }
+}
 // Load the tiles in view once zoomed in far enough that the shading is readable.
 function loadViewTiles() {
   if (map.getZoom() < 11) return;
   const b = map.getBounds();
-  ensureBox(D, [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]).then(n => n && refreshDensity());
+  ensureBox(D, [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]).then(n => n && (refreshDensity(), refreshSurface()));
 }
 // metres → pixels at every zoom: width doubles per zoom level
 const metresWidth = m => ['interpolate', ['exponential', 2], ['zoom'], 10, m / (156543.03 * Math.cos(47.62 * Math.PI / 180) / 2 ** 10), 20, m / (156543.03 * Math.cos(47.62 * Math.PI / 180) / 2 ** 20)];
 
 const LAYERS = {
-  get density() { return [...densityIds]; }, faacat: ['faacat-fill', 'faacat-line'], laanc: ['laanc-line', 'laanc-label'], obstacles: ['obstacles'],
+  get density() { return [...densityIds]; }, get surface() { return [...surfaceIds]; }, crewed: ['crewed'], faacat: ['faacat-fill', 'faacat-line'], laanc: ['laanc-line', 'laanc-label'], obstacles: ['obstacles'],
   power: ['power'], sites: ['sites'], foot: ['foot'], noise: ['noise'], area: ['area-fill', 'area-line'],
 };
 
@@ -118,6 +169,7 @@ map.on('load', () => {
     map.on('mouseenter', id, () => (map.getCanvas().style.cursor = 'pointer'));
     map.on('mouseleave', id, () => (map.getCanvas().style.cursor = ''));
   }
+  refreshTraffic();
   $('loading').remove();
   scene = createScene(map, D, raw);
   setView('3d');
@@ -231,20 +283,21 @@ $('wind').addEventListener('change', async () => {
   score();
 });
 const wind = () => {
-  if ($('wind').value === 'aloft' && live.wind && state.route.length) {
-    const alts = waypointAlts(state.route, +$('alt').value);
-    return windAt(live.wind, alts.reduce((a, b) => a + b, 0) / alts.length);
-  }
+  const alts = state.route.length ? waypointAlts(state.route, +$('alt').value) : [], meanAlt = alts.reduce((a, b) => a + b, 0) / Math.max(1, alts.length);
+  if ($('wind').value === 'aloft' && live.wind && state.route.length) return windAt(live.wind, meanAlt);
+  const clim = { hrrr50: 50, hrrr90: 90 }[$('wind').value];
+  if (clim && state.route.length) return climateWind(D, D.proj(state.route[Math.floor(state.route.length / 2)]), meanAlt, clim) || WIND_PRESETS.typical;
   return ($('wind').value === 'live' && liveWind) || WIND_PRESETS[$('wind').value] || WIND_PRESETS.typical;
 };
 
 // ---------- Live conditions: wind aloft, stadium games, TFRs ----------
-const live = { wind: null, events: null, tfr: null, eventsFailed: 0 };
+const live = { wind: null, events: null, tfr: null, notams: null, eventsFailed: 0 };
 const [cLon, cLat] = [(M.bbox[0] + M.bbox[2]) / 2, (M.bbox[1] + M.bbox[3]) / 2];
 Promise.all([
   windAloft(cLat, cLon).then(w => (live.wind = w)),
   stadiumEvents(30).then(e => { live.events = e.events; live.eventsFailed = e.failed; }).catch(() => (live.eventsFailed = 3)),
   loadTfrs().then(t => (live.tfr = t)),
+  loadNotams().then(n => (live.notams = n)),
 ]).then(() => { renderLive(); scene?.setLive(live); score(); });
 const tz = { timeZone: 'America/Los_Angeles' };
 const hm = d => d.toLocaleTimeString('en-US', { ...tz, hour: 'numeric', minute: '2-digit' });
@@ -255,6 +308,7 @@ function renderLive() {
     ['Gusts at surface', w ? Math.round(w.gustKt) + ' kt' : '—'],
     ['TFRs in Washington', live.tfr ? `${live.tfr.tfrs.length} active or upcoming` : 'snapshot unavailable'],
     ['Stadium closures, 30 days', live.events ? live.events.length : 'unavailable'],
+    ['NOTAMs in the area', live.notams?.fetched ? live.notams.notams.length : 'no FAA API key'],
   ]);
   const now = new Date();
   $('games').innerHTML = (live.events || []).slice(0, 5).map(e => {
@@ -271,12 +325,12 @@ document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('cha
 // ---------- 3D sky / plan view ----------
 // 3D draws the route, lane, footprints and airspace volumes with deck.gl; plan view uses the flat MapLibre layers and the layer toggles.
 let scene = null, view = '3d';
-const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg', 'routeBlocked'];
+const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg', 'routeBlocked', 'crewed'];
 function setView(v) {
   view = v;
   document.body.dataset.view = v;
   $('view').textContent = v === '3d' ? 'Plan view' : '3D sky';
-  if (v === '3d') for (const id of FLAT) map.setLayoutProperty(id, 'visibility', 'none');
+  if (v === '3d') for (const id of [...FLAT, ...surfaceIds]) map.getLayer(id) && map.setLayoutProperty(id, 'visibility', 'none');
   else document.querySelectorAll('[data-layer]').forEach(applyLayer);
   densityOpacity = v === '3d' ? 0.12 : 0.75;
   for (const id of densityIds) map.setPaintProperty(id, 'raster-opacity', densityOpacity);
@@ -311,10 +365,11 @@ function score() {
   // A route needs its grid tiles (plus room for failure footprints) before it can be scored.
   if (state.route.length > 1 && missingTiles(D, routeBox(D, state.route)).length) {
     $('hint').textContent = 'Loading population data for this area…';
-    return ensureBox(D, routeBox(D, state.route)).then(() => { refreshDensity(); score(); });
+    return ensureBox(D, routeBox(D, state.route)).then(() => { refreshDensity(); refreshSurface(); score(); });
   }
   if (tod !== densityTod) refreshDensity(tod);
-  state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod, events: live.events, tfrs: live.tfr?.tfrs || [], when: new Date() }) : null;
+  refreshSurface(); refreshTraffic();
+  state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod, events: live.events, tfrs: live.tfr?.tfrs || [], notams: live.notams?.notams || [], when: new Date() }) : null;
   drawMap(); renderRail(); renderDoc(); saveHash();
   $('hint').textContent = state.route.length ? state.finished ? 'Route complete. Click a waypoint to set its altitude, or the map to start a new route.' : 'Keep clicking. Double-click to finish.' : 'Click to place waypoints. Double-click to finish.';
 }
@@ -339,14 +394,25 @@ const kv = (id, rows) => ($(id).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><
 const n0 = x => Math.round(x).toLocaleString('en-US');
 function renderRail() {
   const r = state.result;
-  if (!r) { $('verdict').innerHTML = '<span class="pill warn">—</span><span>Draw a route</span>'; ['routeKv', 'riskKv', 'airKv', 'noiseKv', 'segbar', 'findings'].forEach(i => ($(i).innerHTML = '')); return; }
+  if (!r) { $('verdict').innerHTML = '<span class="pill warn">—</span><span>Draw a route</span>'; ['routeKv', 'riskKv', 'airKv', 'siteKv', 'noiseKv', 'segbar', 'findings'].forEach(i => ($(i).innerHTML = '')); return; }
   const f = findings(r), v = verdict(f);
   $('verdict').innerHTML = `<span class="pill ${v}">Cat ${r.maxCat}</span><span>${v === 'crit' ? 'Not fileable as drawn' : v === 'warn' ? 'Fileable with mitigations' : 'Fileable'}</span>`;
-  kv('routeKv', [['Corridor', corridorId(r)], ['Length', (r.lenM / 1000).toFixed(2) + ' km'], ['Flight time', r.minutes.toFixed(1) + ' min at ' + r.ac.spd + ' m/s'], ['Altitude', altLabel(r)], ['Wind', `${r.wind.kt} kt from ${r.wind.dir}°`]]);
+  kv('routeKv', [['Corridor', corridorId(r)], ['Length', (r.lenM / 1000).toFixed(2) + ' km'], ['Flight time', r.minutes.toFixed(1) + ' min at ' + r.ac.spd + ' m/s'], ['Altitude', altLabel(r)], ['Wind', `${r.wind.kt} kt from ${r.wind.dir}°${r.wind.src ? ` (${r.wind.src})` : ''}`]]);
   const step = Math.max(1, Math.ceil(r.samples.length / 60));
   $('segbar').innerHTML = r.samples.filter((_, i) => i % step === 0).map(s => `<i class="c${s.c}" title="Cat ${s.c} · ${n0(s.d)} /km²"></i>`).join('');
   kv('riskKv', [['Peak density', n0(r.peakD) + ' /km²'], ['Mean density', n0(r.meanD) + ' /km²'], ['Under footprint (mean)', n0(r.meanUnder) + ' /km²'], ['Landings on dense ground', Math.round(r.hiFrac * 100) + '%'], ['Landings in water', Math.round(r.waterFrac * 100) + '%'], ['Fatalities / flight hr', r.ecPerFh.toExponential(1)], ['Footprint samples', r.foot.length.toLocaleString()]]);
   kv('airKv', [['In LAANC grids', Math.round(r.laancShare * 100) + '%'], ['Lowest ceiling', r.minCeiling == null ? '—' : r.minCeiling + ' ft'], ['Route blocked', Math.round(r.blockedShare * 100) + '%'], ['Buildings within 60 m', r.buildings.length], ['Other obstacles within 60 m', r.obstacles.length], ['Transmission lines', r.powerlines.length], ['Airspace features', r.airspace.filter(a => !a.conditional).length]]);
+  const pc = x => Math.round(x * 100) + '%', t = r.traffic, c = r.climate;
+  kv('siteKv', [
+    ['Lidar coverage', r.lidarShare == null ? 'not built' : pc(r.lidarShare)],
+    ['Tallest surface ≤ 30 m', r.surfaceMaxFt == null ? '—' : r.surfaceMaxFt + ' ft'],
+    ['Unmapped trees / structures', r.surfaceHits.length ? `${r.surfaceHits.length} near level` : 'none near level'],
+    ['Crewed traffic at level', t ? `${t.level}, ${rateText(t.encountersPerFh)}${t.encountersPerFh ? ' / flight hr' : ''}` : '—'],
+    ['Helicopter share', t ? pc(t.rotorShare) : '—'],
+    ['Land use under route', r.land ? r.land.mix.slice(0, 2).map(([k, v]) => `${k} ${pc(v)}`).join(', ') : '—'],
+    ['Longest gap, no landing site', r.land ? (r.land.landingGapM / 1000).toFixed(1) + ' km' : '—'],
+    ['Daytime wind > 20 kt (80 m)', c ? `${pc(c.over['20'])} of hours, HRRR ${c.year}` : '—'],
+  ]);
   kv('noiseKv', [['Source level', r.ac.src + ' dB @ 1 m'], ['Directly below', Math.round(noiseAt(0, r.altMin, r.ac)) + ' dB'], ['55 dB half-width', n0(r.halfWidth55) + ' m'], ['Hospitals ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'hospital').length], ['Schools ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'school').length]]);
   $('findings').innerHTML = f.map(([c, t]) => `<li class="${c}">${t}</li>`).join('');
 }

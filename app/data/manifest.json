@@ -6,7 +6,7 @@
   -121.75,
   48.05
  ],
- "built": "2026-10-21",
+ "built": "2026-10-22",
  "layers": {
   "obstacles": {
    "source": "FAA Digital Obstacle File (daily) + OpenStreetMap",
@@ -20,7 +20,7 @@
   },
   "buildings": {
    "source": "OpenStreetMap building and building:part footprints, height >= 20 m or >= 6 levels",
-   "count": 2113
+   "count": 2122
   },
   "sites": {
    "source": "OpenStreetMap amenities + FAA ADDS airports/heliports/stadiums",
@@ -51,9 +51,58 @@
    "jobs_est": 1991587,
    "cell_m": 100
   },
+  "landuse": {
+   "source": "OpenStreetMap landuse, leisure, natural and amenity areas, rasterized to 100 m (most specific area wins)",
+   "count": 446479,
+   "cells": {
+    "unmapped": 466251,
+    "residential": 116757,
+    "commercial": 8700,
+    "industrial": 11717,
+    "institutional": 15254,
+    "park": 42551,
+    "forest": 189730,
+    "open land": 17775,
+    "rail and transport": 831,
+    "water": 33764,
+    "cemetery": 750,
+    "construction": 4662,
+    "parking": 3988
+   }
+  },
+  "heights": {
+   "source": "USGS 3DEP lidar point clouds (EPT, depth 6), second-highest return above the 3DEP DEM per 50 m cell",
+   "count": 1490140,
+   "surveys": [
+    "WA_KingCo_1_2021",
+    "WA_Nisqually_TopoBathy_1_2020",
+    "WA_PierceCounty_1_2020",
+    "WA_ThurstonCo_1_2021"
+   ],
+   "returns": 235307908,
+   "tree_multi_return_share": 0.5
+  },
+  "traffic": {
+   "source": "OpenSky Network historical ADS-B state vectors (4 Mondays, 40 hours), below 3,000 ft AGL",
+   "count": 258379,
+   "aircraft": 6444,
+   "stale_dropped": 127701,
+   "days": [
+    "2021-09-13",
+    "2021-12-13",
+    "2022-03-14",
+    "2022-06-20"
+   ]
+  },
+  "wind": {
+   "source": "NOAA HRRR 2025 hourly analyses, 10 m and 80 m wind and surface gust, local 07:00-20:00",
+   "count": 1129,
+   "hours": 4742,
+   "months": 12
+  },
   "lanes": {
    "source": "OpenStreetMap highway=motorway|trunk|primary|secondary, scored with app/engine.js",
-   "count": 24603
+   "count": 24722
   }
  }
 }

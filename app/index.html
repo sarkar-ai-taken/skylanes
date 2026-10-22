@@ -127,7 +127,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
       <select id="route" autocomplete="off" aria-label="Sample route"></select>
       <select id="aircraft" autocomplete="off" aria-label="Aircraft"></select>
       <select id="alt" autocomplete="off" aria-label="Altitude"><option value="150">150 ft AGL</option><option value="200">200 ft AGL</option><option value="250">250 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="350">350 ft AGL</option><option value="400">400 ft AGL</option></select>
-      <select id="wind" autocomplete="off" aria-label="Wind"><option value="aloft" selected>Wind: live at altitude</option><option value="calm">Wind 5 kt S</option><option value="typical">Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="live">Wind: surface at KBFI</option></select>
+      <select id="wind" autocomplete="off" aria-label="Wind"><option value="aloft" selected>Wind: live at altitude</option><option value="calm">Wind 5 kt S</option><option value="typical">Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="hrrr50">Wind: typical day here (HRRR median)</option><option value="hrrr90">Wind: windy day here (HRRR 90th pct)</option><option value="live">Wind: surface at KBFI</option></select>
       <select id="tod" autocomplete="off" aria-label="Time of day"><option value="day" selected>Weekday daytime</option><option value="night">Overnight</option><option value="event">Stadium event day</option></select>
       <button id="climb" title="Raise only the legs that hit something, up to 400 ft and the ceiling">Climb over</button>
       <button id="around" title="Find a path around buildings and obstacles at this altitude">Go around</button>
@@ -139,6 +139,8 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
     <div class="layers">
       <label><input type="checkbox" data-layer="density" checked>Population</label>
       <label><input type="checkbox" data-layer="faacat">FAA categories</label>
+      <label><input type="checkbox" data-layer="surface">Lidar heights</label>
+      <label><input type="checkbox" data-layer="crewed">Crewed traffic</label>
       <label><input type="checkbox" data-layer="laanc" checked>LAANC grid</label>
       <label><input type="checkbox" data-layer="obstacles" checked>Obstacles</label>
       <label><input type="checkbox" data-layer="power" checked>Power lines</label>
@@ -159,6 +161,8 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
       <div class="note" style="margin-top:6px">FAA category along the route</div><div class="seg" id="segbar"></div></div>
     <div class="card"><h2>Ground risk</h2><dl class="kv" id="riskKv"></dl></div>
     <div class="card"><h2>Airspace and obstacles</h2><dl class="kv" id="airKv"></dl></div>
+    <div class="card"><h2>Site data</h2><dl class="kv" id="siteKv"></dl>
+      <div class="note">3DEP lidar, OpenSky ADS-B (crewed traffic at the route's level), OSM land use, NOAA HRRR wind climatology.</div></div>
     <div class="card"><h2>Live conditions</h2><dl class="kv" id="liveKv"><dt>Loading</dt><dd>…</dd></dl>
       <ul class="games" id="games"></ul><div class="note" id="liveNote"></div></div>
     <div class="card"><h2>Noise</h2><dl class="kv" id="noiseKv"></dl></div>
@@ -176,6 +180,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 <footer class="note credits">
   Prototype for planning and discussion. Not an FAA product and not a filed document; verify every finding before relying on it.
   Data: US Census Bureau (2020 blocks, LEHD LODES), FAA (Digital Obstacle File, UAS Facility Maps, ADDS), National Weather Service,
+  USGS 3DEP (lidar and elevation), <a href="https://opensky-network.org">OpenSky Network</a> (historical ADS-B), NOAA HRRR via the University of Utah HRRR Zarr archive,
   © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL), basemap by <a href="https://openfreemap.org">OpenFreeMap</a> / OpenMapTiles.
   <a href="https://github.com/sarkar-ai-taken/skylanes">Source on GitHub</a>.
 </footer>

@@ -74,3 +74,8 @@ export async function stadiumEvents(days = 30) {
 export async function loadTfrs() {
   try { const t = await (await fetch('data/tfr.json', { cache: 'no-cache' })).json(); return t.fetched ? t : null; } catch { return null; }
 }
+
+/** NOTAMs around the metro, from the snapshot the Pages workflow writes when it has an FAA API key. */
+export async function loadNotams() {
+  try { const t = await (await fetch('data/notams.json', { cache: 'no-cache' })).json(); return t; } catch { return null; }
+}
