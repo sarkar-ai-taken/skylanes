@@ -45,3 +45,26 @@ test('signals sit at lane junctions, spaced out and clear of the climb and desce
     if (k) assert.ok(S[k].s - S[k - 1].s >= 2000);
   }
 });
+
+test('game mode: tilting the phone steers and climbs the same way in portrait and both landscapes', async () => {
+  const { screenTilt, tiltInput } = await import('../app/ride-sim.js');
+  // portrait, held 45° back: tilt the right edge down → right; pull the top toward you → climb
+  const p0 = screenTilt(45, 0, 0);
+  assert.ok(Math.abs(p0.roll) < 1e-9 && Math.abs(p0.pitch - 45) < 1e-9);
+  assert.ok(tiltInput(screenTilt(45, 30, 0), p0).x > 0.5);
+  assert.ok(tiltInput(screenTilt(65, 0, 0), p0).y > 0.5);
+  assert.ok(tiltInput(screenTilt(25, 0, 0), p0).y < -0.5);
+  assert.deepEqual(tiltInput(screenTilt(47, 2, 0), p0), { x: 0, y: 0 }, 'inside the dead zone');
+  // landscape, rotated 90° (device top to the left), held 45° back: β 0, γ −45
+  const l0 = screenTilt(0, -45, 90);
+  assert.ok(Math.abs(l0.roll) < 1e-6 && Math.abs(l0.pitch - 45) < 1e-6);
+  assert.ok(tiltInput(screenTilt(20, -45, 90), l0).x > 0.5, 'right edge (device bottom) down');
+  assert.ok(tiltInput(screenTilt(0, -70, 90), l0).y > 0.5, 'more upright climbs');
+  // and the other landscape
+  const r0 = screenTilt(0, 45, 270);
+  assert.ok(Math.abs(r0.roll) < 1e-6 && Math.abs(r0.pitch - 45) < 1e-6);
+  assert.ok(tiltInput(screenTilt(0, 70, 270), r0).y > 0.5);
+  // input saturates and never goes NaN near upright
+  const up = tiltInput(screenTilt(89.9, 89.9, 0), p0);
+  assert.ok(Math.abs(up.x) <= 1 && Math.abs(up.y) <= 1 && !Number.isNaN(up.x + up.y));
+});
