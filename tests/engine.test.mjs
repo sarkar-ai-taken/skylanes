@@ -171,3 +171,27 @@ test('air-taxi routing follows the lanes and falls back to direct when they woul
   const short = routeOnLanes(D, G, at('center'), at('slu'));
   assert.ok(short.direct || short.totalM < 2 * 1500);
 });
+
+test('fleet simulation: deterministic, every order accounted for, refusals carry reasons', async () => {
+  const { simulate, REASONS } = await import('../app/fleet-sim.js');
+  const t = performance.now();
+  const a = simulate(D, { hours: 2, ordersPerHour: 60, fleet: 8 });
+  const ms = performance.now() - t;
+  const b = simulate(D, { hours: 2, ordersPerHour: 60, fleet: 8 });
+  assert.deepEqual(a.metrics, b.metrics);
+  const m = a.metrics;
+  assert.ok(m.orders > 80 && m.orders < 160, `orders ${m.orders}`);
+  assert.equal(m.delivered + m.refusedTotal, m.orders);
+  for (const k of Object.keys(m.refused)) assert.ok(REASONS[k], k);
+  assert.ok(m.delivered > m.orders * 0.3, `delivered ${m.delivered}/${m.orders}`);
+  assert.ok(m.medianMin > 2 && m.medianMin < 60, `median ${m.medianMin}`);
+  assert.ok(ms < 8000, `sim took ${ms} ms`);
+  console.log(`fleet: ${m.orders} orders, ${m.delivered} delivered, refused ${JSON.stringify(m.refused)}, median ${m.medianMin.toFixed(1)} min, p90 ${m.p90Min.toFixed(1)}, busy ${(m.busyShare * 100).toFixed(0)}%, ${ms.toFixed(0)} ms`);
+});
+
+test('a smaller fleet waits longer and refuses more for being busy', async () => {
+  const { simulate } = await import('../app/fleet-sim.js');
+  const big = simulate(D, { hours: 2, ordersPerHour: 90, fleet: 20 }).metrics, small = simulate(D, { hours: 2, ordersPerHour: 90, fleet: 3 }).metrics;
+  assert.ok(small.medianMin > big.medianMin);
+  assert.ok((small.refused.busy || 0) > (big.refused.busy || 0));
+});

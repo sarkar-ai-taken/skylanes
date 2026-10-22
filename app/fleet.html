@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skylanes Fleet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath d=%27M2 13 L7 6 L10 9 L14 3%27 fill=%27none%27 stroke=%27%2352c9a2%27 stroke-width=%272.5%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Layout: operations view. 3D map left with a playback bar; controls, KPIs and charts in a scrolling rail right. */
+:root{
+  --bg:#0c1116; --panel:#121920; --panel2:#18212a; --fg:#e6ebee; --muted:#8c9aa6; --line:#24303b; --grid:#202a34;
+  --series:#52c9a2; --good:#52c9a2; --warn:#f2b84b; --crit:#ef6b5c; --accent:#52c9a2;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 400px;height:100vh}
+@media(max-width:900px){.app{grid-template-columns:1fr;height:auto}.mapwrap{height:62vh}}
+.mapwrap{position:relative;min-height:360px}
+#map{position:absolute;inset:0}
+.rail{overflow-y:auto;border-left:1px solid var(--line);background:var(--panel);padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px}
+.brand{font-weight:600}.brand span{color:var(--accent)}
+.pages{display:flex;gap:4px}
+.pages a{color:var(--muted);text-decoration:none;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+.pages a[aria-current]{color:var(--fg);border-color:var(--accent)}
+h1{font-size:18px;margin:0 0 4px}
+.lede{color:var(--muted);font-size:13px;margin:0 0 14px}
+.sec{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+.sec h2{font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:500}
+.ctl{display:grid;grid-template-columns:120px 1fr 52px;align-items:center;gap:8px;margin-bottom:8px;font-size:13px}
+.ctl label{color:var(--muted)}
+.ctl output{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+select,button{font:inherit;font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--fg)}
+select:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button{cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#07130f;font-weight:600}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:8px}
+.kpi b{display:block;font-size:20px;font-weight:500;font-variant-numeric:tabular-nums}
+.kpi span{font-size:11px;color:var(--muted)}
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.chart .ttl{font-size:12px;color:var(--fg);margin-bottom:4px}
+.chart .sub{color:var(--muted)}
+.tip{position:absolute;pointer-events:none;background:#0a0f14;border:1px solid var(--line);border-radius:4px;padding:5px 8px;font-size:12px;white-space:nowrap;opacity:0;transform:translate(-50%,-110%)}
+.tip b{font-variant-numeric:tabular-nums}
+.bars{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.bar{display:grid;grid-template-columns:1fr 64px;gap:4px 8px;align-items:center}
+.bar .lab{color:var(--muted)}
+.bar .val{text-align:right;font-family:var(--mono)}
+.bar .trk{grid-column:1/-1;height:8px;position:relative}
+.bar .trk i{position:absolute;left:0;top:0;bottom:0;background:var(--crit);border-radius:0 4px 4px 0;min-width:2px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend span{display:flex;gap:5px;align-items:center}.legend i{width:9px;height:9px;border-radius:50%}
+details summary{cursor:pointer;color:var(--muted);font-size:12px}
+table{border-collapse:collapse;font-size:12px;width:100%;font-variant-numeric:tabular-nums;margin-top:6px}
+th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:right}th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500}
+.note{font-size:11px;color:var(--muted)}
+.play{position:absolute;left:12px;right:12px;bottom:28px;display:flex;gap:10px;align-items:center;background:rgba(18,25,32,.9);border:1px solid var(--line);border-radius:8px;padding:8px 10px;z-index:3}
+.play input{flex:1}
+.play .clock{font-family:var(--mono);font-variant-numeric:tabular-nums;min-width:6.5em}
+.hint{position:absolute;top:12px;left:12px;background:rgba(18,25,32,.9);border:1px solid var(--line);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--muted);z-index:3;max-width:calc(100% - 24px)}
+.counts{position:absolute;top:12px;right:56px;display:flex;gap:6px;z-index:3}
+.counts div{background:rgba(18,25,32,.9);border:1px solid var(--line);border-radius:6px;padding:4px 10px;font-size:12px}
+.counts b{font-variant-numeric:tabular-nums}
+.expand h3{margin:0 0 4px;font-size:14px}.expand form{display:flex;gap:6px;margin-top:8px}.expand input{flex:1;min-width:0;font:inherit;font-size:13px;padding:6px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel2);color:var(--fg)}
+.expand .fine{font-size:11px;color:var(--muted);margin-top:6px}
+.busy{opacity:.5;transition:opacity .2s}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="mapwrap">
+    <div id="map" role="application" aria-label="Delivery fleet map"></div>
+    <div class="hint" id="hint">Orders appear at real homes, weighted by census population.</div>
+    <div class="counts" aria-live="polite"><div>Airborne <b id="cAir">0</b></div><div>Waiting <b id="cWait">0</b></div><div>Delivered <b id="cDone">0</b></div></div>
+    <div class="play">
+      <button id="playBtn" aria-label="Play">Pause</button>
+      <span class="clock" id="clock">10:00</span>
+      <input type="range" id="scrub" min="0" max="14400" value="0" step="10" aria-label="Simulation time">
+      <select id="pace" aria-label="Playback speed" autocomplete="off"><option value="30">30×</option><option value="60" selected>60×</option><option value="180">180×</option></select>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <header><div class="brand">Sky<span>lanes</span> Fleet</div><div id="nav"></div></header>
+    <h1>Warehouse delivery simulation</h1>
+    <p class="lede">Every order is checked against real buildings, airspace and ground risk before a drone takes it.</p>
+
+    <div class="sec"><h2>Operation</h2>
+      <div class="ctl"><label for="wh">Warehouse</label><select id="wh" autocomplete="off" style="grid-column:2/4"></select></div>
+      <div class="row" style="margin:-2px 0 10px"><button id="place">Place on map</button><span class="note" id="whNote" style="align-self:center"></span></div>
+      <div class="ctl"><label for="fleet">Drones</label><input type="range" id="fleet" min="2" max="40" value="12"><output id="oFleet">12</output></div>
+      <div class="ctl"><label for="rate">Orders / hour</label><input type="range" id="rate" min="10" max="240" step="10" value="60"><output id="oRate">60</output></div>
+      <div class="ctl"><label for="radius">Service radius</label><input type="range" id="radius" min="2" max="10" value="6"><output id="oRadius">6 km</output></div>
+      <div class="ctl"><label for="hours">Window</label><input type="range" id="hours" min="1" max="8" value="4"><output id="oHours">4 h</output></div>
+      <div class="ctl"><label for="aircraft">Aircraft</label><select id="aircraft" autocomplete="off" style="grid-column:2/4"><option value="quad">Multirotor, 2.5 lb, 16 km round trip</option><option value="fixed">Fixed-wing VTOL, 4 lb, 40 km round trip</option></select></div>
+      <div class="ctl"><label for="alt">Cruise level</label><select id="alt" autocomplete="off" style="grid-column:2/4"><option value="200">200 ft</option><option value="250">250 ft</option><option value="300" selected>300 ft</option><option value="350">350 ft</option><option value="400">400 ft</option></select></div>
+      <div class="ctl"><label for="promise">Promise</label><input type="range" id="promise" min="15" max="90" step="5" value="60"><output id="oPromise">60 min</output></div>
+    </div>
+
+    <div class="sec"><h2>Results</h2>
+      <div class="kpis" id="kpis"></div>
+      <div class="note" id="kpiNote" style="margin-top:6px"></div>
+    </div>
+
+    <div class="sec"><div class="chart" id="chWait"></div></div>
+    <div class="sec"><div class="chart" id="chDone"></div></div>
+
+    <div class="sec"><h2>Why orders were refused</h2><div class="bars" id="reasons"></div></div>
+
+    <div class="sec"><h2>Map key</h2>
+      <div class="legend"><span><i style="background:var(--warn)"></i>Waiting</span><span><i style="background:var(--good)"></i>Delivered</span><span><i style="background:var(--crit)"></i>Refused</span><span><i style="background:#fff"></i>Drone</span></div>
+      <details style="margin-top:10px"><summary>Table: every 15 minutes</summary><div id="table"></div></details>
+    </div>
+
+    <div class="sec expand" id="expand"></div>
+    <p class="note">Simulation on real Seattle data: census homes, OSM buildings, FAA airspace. Aircraft classes are generic; promise, load, drop and battery-swap times are adjustable assumptions in fleet-sim.js.</p>
+  </aside>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+<script type="module" src="fleet.js"></script>
+</body>
+</html>

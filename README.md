@@ -19,7 +19,7 @@ MLB, NFL and NCAA football home games (MLB statsapi, ESPN) that switch on the FA
 windows; and active Washington TFRs from tfr.faa.gov. That site blocks browser requests, so the Pages workflow
 fetches it hourly (`pipeline/tfr.mjs`) and ships `data/tfr.json` with the site.
 
-**Live:** https://sarkar-ai-taken.github.io/skylanes/ · no sign-up, no API keys, runs entirely in the browser.
+**Live:** https://sarkar-ai-taken.github.io/skylanes/ (planner) · [/ride.html](https://sarkar-ai-taken.github.io/skylanes/ride.html) (fly an air taxi) · [/fleet.html](https://sarkar-ai-taken.github.io/skylanes/fleet.html) (warehouse fleet simulation) · no sign-up, no API keys, runs entirely in the browser.
 Every analysis is a shareable link (the route and settings live in the URL).
 
 > Prototype for planning and discussion. Not an FAA product and not a filed document.
@@ -31,6 +31,19 @@ Every analysis is a shareable link (the route and settings live in the URL).
     npm run build-data   # refetch and rebuild app/data/ (needs .venv with shapely, pyshp)
 
 Set up the pipeline once: `python3 -m venv .venv && .venv/bin/pip install shapely pyshp`.
+
+## Three pages
+
+- **Plan a route** (`index.html`): the safety-case planner above.
+- **Ride** (`ride.html`): pick two concept vertiports and fly an air taxi on the 800 / 1,000 ft lanes, with chase, cabin
+  and orbit cameras, a heads-up display and a car-time comparison. A 2035 concept on today's map.
+- **Fleet** (`fleet.html`): place a warehouse, set drones, order rate, radius and delivery promise. Orders arrive at
+  census-weighted homes; each is checked by the engine (range, Category 5 drop, airspace approval, buildings, stadium
+  TFRs) and either dispatched, rerouted, flown lower or refused with a reason. Playback in 3D with KPIs and charts
+  (`app/fleet-sim.js`, deterministic, tested).
+
+Each page has an "Expand beyond Seattle" sign-up box. It stays closed until `app/config.js` names an endpoint
+(Formspree or a Google Form).
 
 ## Prototype it yourself, free
 

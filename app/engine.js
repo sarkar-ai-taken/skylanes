@@ -581,3 +581,25 @@ export function routeOnLanes(D, G, from, to, { maxDetour = 2 } = {}) {
   const xy = [A, ...legs.flatMap((l, i) => (i ? l.slice(1) : l)), B];
   return { path: xy.map(D.unproj), onLanesM: dist.get(t), totalM: total, direct: false };
 }
+
+// ---------- Fast checks for many routes (fleet simulation) ----------
+/**
+ * The subset of scoreRoute a dispatcher needs, about 50× cheaper: clearance against buildings and obstacles,
+ * the lowest LAANC ceiling, the drop point's FAA category, mean density under the path and length.
+ */
+export function quickCheck(D, route, altFt, { stepM = 25, tod = 'day', ...opt } = {}) {
+  const o = { ...DEFAULTS, ...opt }, pts = route.map(p => D.proj(p)), alts = waypointAlts(route, altFt);
+  let lenM = 0, blocked = 0, minCeiling = null, dSum = 0, n = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], L = hyp(a, b), steps = Math.max(1, Math.ceil(L / stepM));
+    for (let s = 0; s <= steps; s++) {
+      const xy = [a[0] + (b[0] - a[0]) * s / steps, a[1] + (b[1] - a[1]) * s / steps], alt = alts[i] + (alts[i + 1] - alts[i]) * s / steps;
+      if (isBlocked(D, xy, alt, o)) blocked++;
+      const c = facilityCeiling(D, xy); if (c != null) minCeiling = Math.min(minCeiling ?? Infinity, c);
+      dSum += density(D, xy, tod); n++;
+    }
+    lenM += L;
+  }
+  const end = pts[pts.length - 1];
+  return { lenM, blocked, minCeiling, dropCat: faaCategory(D, end) ?? catFromDensity(density(D, end, tod)), meanD: n ? dSum / n : 0, dropWater: isWater(D, end) };
+}
