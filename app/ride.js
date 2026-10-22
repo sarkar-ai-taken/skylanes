@@ -35,7 +35,9 @@ function plan() {
   const level = brg < 180 ? TIERS[TAXI].levels[0] : TIERS[TAXI].levels[1];
   const R = routeOnLanes(D, graphs[level], A.at, B.at);
   trip = build(A, B, R, level);
-  const carMin = Math.round(trip.direct * 1.35 / 1000 / 24 * 60 + 4); // road ≈ 1.35 × straight line at 24 km/h city average, plus parking
+  // Road ≈ 1.35 × straight line. Average speed rises with distance as more of the trip is freeway:
+  // about 26 km/h across town, up to 50 km/h for 20 km and more, plus 4 min to park.
+  const km = trip.direct * 1.35 / 1000, carMin = Math.round(km / Math.min(50, 20 + 1.5 * km) * 60 + 4);
   trip.carMin = carMin;
   $('qAir').textContent = `${Math.round(trip.T / 60)} min`;
   $('qCar').textContent = `~${carMin} min`;
