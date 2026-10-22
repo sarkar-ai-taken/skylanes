@@ -6,7 +6,7 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    - cron: '17 * * * *'   # hourly: refresh the TFR snapshot (tfr.faa.gov blocks browser requests)
+    - cron: '17 * * * *'   # hourly: refresh the TFR and NOTAM snapshots (neither source allows browser requests)
 
 permissions:
   contents: read
@@ -41,6 +41,11 @@ jobs:
           node-version: 22
       - name: Fetch active TFRs
         run: node pipeline/tfr.mjs || echo '{"fetched":null,"tfrs":[]}' > app/data/tfr.json
+      - name: Fetch NOTAMs (skipped without the FAA NOTAM API key secrets)
+        env:
+          FAA_NOTAM_CLIENT_ID: ${{ secrets.FAA_NOTAM_CLIENT_ID }}
+          FAA_NOTAM_CLIENT_SECRET: ${{ secrets.FAA_NOTAM_CLIENT_SECRET }}
+        run: node pipeline/notams.mjs || echo '{"fetched":null,"notams":[]}' > app/data/notams.json
       - name: Assemble site
         run: |
           mkdir -p _site/prototypes

@@ -42,7 +42,7 @@ function decode(b64, Type) {
   return Type === Uint8Array ? bytes : new Type(bytes.buffer);
 }
 
-export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest, buildings = [] }) {
+export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest, buildings = [], traffic = null, wind = null }) {
   const [W, S, E, N] = manifest.bbox;
   const lat0 = (S + N) / 2, lon0 = (W + E) / 2;
   const mLon = 111320 * Math.cos(lat0 * Math.PI / 180), mLat = 110574;
@@ -61,6 +61,8 @@ export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest
     surface: polys(airspace.surface_areas),
     opcats: polys(airspace.operating_categories),
     classB: polys(airspace.class_b || []),
+    traffic: traffic && { ...traffic, density: traffic.density.map(b => decode(b, Float32Array)), rotor: traffic.rotor.map(b => decode(b, Float32Array)) },
+    wind: wind && { ...wind, xy: wind.points.map(proj) },
   };
 }
 
@@ -131,7 +133,9 @@ const WATER = { state: 1 }, NODATA = { state: 2 }, UNLOADED = { state: 3 };
 /** Decode one tile file and make it available to every query. */
 export function addTile(D, t) {
   D.grid.loaded.set(`${t.ti}_${t.tj}`, { ...t, residents: decode(t.residents, Uint32Array), jobs: decode(t.jobs, Uint32Array),
-    state: decode(t.state, Uint8Array), faacat: decode(t.faacat, Uint8Array), ceiling: decode(t.ceiling, Uint16Array) });
+    state: decode(t.state, Uint8Array), faacat: decode(t.faacat, Uint8Array), ceiling: decode(t.ceiling, Uint16Array),
+    landuse: t.landuse ? decode(t.landuse, Uint8Array) : null,
+    surf: t.surf ? decode(t.surf, Uint8Array) : null, surfkind: t.surfkind ? decode(t.surfkind, Uint8Array) : null });
 }
 /** Tile keys covering a [west, south, east, north] box that are listed but not loaded. */
 export function missingTiles(D, [w, s, e, n]) {
@@ -192,6 +196,87 @@ export const isWater = (D, xy) => cellOf(D, xy).state === 1;
 export function faaCategory(D, xy) { const c = cellOf(D, xy); return c.t && c.t.faacat[c.k] ? c.t.faacat[c.k] : null; }
 /** UAS facility map ceiling (ft AGL) at xy, or null outside controlled airspace grids. */
 export function facilityCeiling(D, xy) { const c = cellOf(D, xy); return c.t && c.t.ceiling[c.k] !== 65535 ? c.t.ceiling[c.k] : null; }
+/** OSM land-use class name at xy ('unmapped' where OSM has none), or null when the tile carries no land use. */
+export function landUse(D, xy) { const c = cellOf(D, xy); return c.t?.landuse ? D.grid.landuse[c.t.landuse[c.k]] : null; }
+// Where a failing drone can come down with nobody under it: parks, fields, cemeteries.
+export const OPEN_LAND = new Set(['park', 'open land', 'cemetery']);
+
+// ---------- Lidar surface heights (USGS 3DEP) ----------
+// Each tile can carry a 50 m raster at half the grid cell: tallest return above ground in 4 ft steps (255 = no lidar),
+// and a kind flag (0 low, 1 structure, 2 tree canopy, 3 a mapped building or filed obstacle already accounts for it).
+export const SURF_KIND = ['ground', 'structure', 'tree canopy', 'mapped structure'];
+/**
+ * Tallest lidar surface (ft) in the 50 m cells touching a circle of r metres around xy: { ft, kind }, or null where
+ * no survey covers it. Cells are 50 m, so this is conservative by up to one cell. With unmapped, cells that a mapped
+ * footprint or obstacle accounts for count as ground: the exact footprint is tested instead.
+ */
+export function surfaceNear(D, xy, r = 0, unmapped = false) {
+  const g = D.grid, [lon0, lat0] = D.unproj([xy[0] - r, xy[1] - r]), [lon1, lat1] = D.unproj([xy[0] + r, xy[1] + r]);
+  const hl = g.dlon / 2, ht = g.dlat / 2;
+  let best = null;
+  for (let J = Math.floor((lat0 - g.south) / ht); J <= Math.floor((lat1 - g.south) / ht); J++)
+    for (let I = Math.floor((lon0 - g.west) / hl); I <= Math.floor((lon1 - g.west) / hl); I++) {
+      const c = cellAt(D, I >> 1, J >> 1);
+      if (!c.t?.surf) continue;
+      const k = (J - c.t.tj * g.tile * 2) * c.t.w * 2 + (I - c.t.ti * g.tile * 2), v = c.t.surf[k];
+      if (v === 255) continue;
+      const kind = c.t.surfkind[k], ft = unmapped && kind === 3 ? 0 : v * 4;
+      if (!best || ft > best.ft) best = { ft, kind: SURF_KIND[unmapped && kind === 3 ? 0 : kind] };
+    }
+  return best;
+}
+
+// ---------- Crewed traffic (historical ADS-B) ----------
+/** Altitude band index (BANDS_FT) holding altFt, or -1 above the top band. */
+const bandOf = (T, altFt) => T.bands_ft.findIndex((b, i) => i < T.bands_ft.length - 1 && altFt >= b && altFt < T.bands_ft[i + 1]);
+/** Mean crewed aircraft present per km² at xy in the band holding altFt: { rho, rotor }, or null without the layer. */
+export function trafficAt(D, xy, altFt) {
+  const T = D.traffic; if (!T) return null;
+  const b = bandOf(T, altFt); if (b < 0) return null;
+  const [lon, lat] = D.unproj(xy), i = Math.floor((lon - T.west) / T.dlon), j = Math.floor((lat - T.south) / T.dlat);
+  if (i < 0 || j < 0 || i >= T.nx || j >= T.ny) return null;
+  return { rho: T.density[b][j * T.nx + i], rotor: T.rotor[b][j * T.nx + i], band: b };
+}
+/** Crewed aircraft per flight hour as text: 'none recorded', 3.2e-3 or 0.44. */
+export const rateText = x => (x === 0 ? 'none recorded' : x < 0.01 ? x.toExponential(1) : x.toFixed(2));
+/** 'low' at or below the region's median cell, 'moderate' to the 90th percentile, 'high' to the 99th, then 'very high'. */
+export function trafficLevel(D, rho, band) {
+  const [p50, p90, p99] = D.traffic.pct[band];
+  return rho <= p50 ? 'low' : rho <= p90 ? 'moderate' : rho <= p99 ? 'high' : 'very high';
+}
+
+// ---------- Wind climatology (NOAA HRRR) ----------
+/** Index of the HRRR climatology point nearest xy, or -1 without the layer. */
+function windPoint(D, xy) {
+  const C = D.wind; if (!C) return -1;
+  let best = -1, d = Infinity;
+  C.xy.forEach((p, i) => { const e = hyp(p, xy); if (e < d) { d = e; best = i; } });
+  return best;
+}
+/** Speed at altFt from the 10 m and 80 m values by the power law the two levels imply. */
+const toAlt = (v10, v80, altFt) => { const a = Math.log(Math.max(v80, 0.1) / Math.max(v10, 0.1)) / Math.log(8); return v80 * Math.max(0.3, altFt / FT / 80) ** a; };
+/**
+ * Climatological daytime wind at xy and altFt: pct 50 (a typical day) or 90 (a windy day). Direction is the most
+ * common sector of strong (> 15 kt) winds. Returns a scoreRoute wind object with its source attached.
+ */
+export function climateWind(D, xy, altFt, pct = 50) {
+  const C = D.wind, k = windPoint(D, xy); if (k < 0) return null;
+  const v10 = C[`p${pct}_10`][k], v80 = C[`p${pct}_80`][k];
+  const rose = (pct >= 90 ? C.rose_over15 : C.rose).map(r => r[k]), sector = rose.indexOf(Math.max(...rose));
+  return { kt: Math.round(toAlt(v10, v80, altFt)), dir: sector * 45, g: Math.min(0.6, Math.max(0.1, C.gust_factor[k] - 1)), src: `HRRR ${C.year} p${pct}` };
+}
+/**
+ * Operating-weather summary at xy: share of daytime hours the 80 m (262 ft) wind exceeds each sustained limit, worst
+ * month, gust p99, and the median and 90th percentile carried to altFt by the power law.
+ */
+export function windClimate(D, xy, altFt) {
+  const C = D.wind, k = windPoint(D, xy); if (k < 0) return null;
+  const at = p => Math.round(toAlt(C[`p${p}_10`][k], C[`p${p}_80`][k], altFt));
+  const over = Object.fromEntries(Object.entries(C.over_80).map(([v, a]) => [v, a[k]]));
+  const months = C.month_over20_80.map(m => m[k]), worst = months.indexOf(Math.max(...months));
+  return { over, p50: at(50), p90: at(90), altFt: Math.round(altFt), gustP99: Math.round(C.gust_p99[k]),
+    worstMonth: worst + 1, worstOver20: months[worst], year: C.year, hours: C.hours, dayHours: C.day_hours };
+}
 
 // ---------- Physics ----------
 /** Monte Carlo failure landings around xy. Returns [x, y] points in metres. */
@@ -218,7 +303,8 @@ export const noiseAt = (horizM, altFt, ac) => { const r = Math.hypot(horizM, alt
 export const noiseHalfWidth = (altFt, ac, db = 55) => Math.sqrt(Math.max(0, (10 ** ((ac.src - db) / 20)) ** 2 - (altFt / FT) ** 2));
 
 // ---------- Route scoring ----------
-export const DEFAULTS = { failRatePerFh: 1e-4, sampleM: 25, footEveryM: 100, footN: 40, obstacleLateralM: 60, clearM: 30, obstacleVertFt: 50, buildingHitM: 10, powerlineM: 30, powerlineMaxFt: 250, heliportM: 800, denseKm2: 5000 };
+export const DEFAULTS = { failRatePerFh: 1e-4, sampleM: 25, footEveryM: 100, footN: 40, obstacleLateralM: 60, clearM: 30, obstacleVertFt: 50, buildingHitM: 10, powerlineM: 30, powerlineMaxFt: 250, heliportM: 800, denseKm2: 5000,
+  encounterKm: 1, landingReachM: 150, notamObstacleM: 600 };
 
 /** Altitude (ft AGL) of each waypoint: its own third coordinate, else the route default. */
 export const waypointAlts = (route, altFt) => route.map(p => (p.length > 2 && Number.isFinite(p[2]) ? p[2] : altFt));
@@ -227,20 +313,22 @@ export const waypointAlts = (route, altFt) => route.map(p => (p.length > 2 && Nu
  * Tallest building or obstacle (ft) within `r` metres of xy. The clearance rule used everywhere: a drone must keep
  * clearM (30 m) sideways from anything that rises to within obstacleVertFt (50 ft) of its altitude.
  */
-function tallestNear(D, xy, r) {
+function tallestNear(D, xy, r, lidar = true) {
   index(D);
   let h = 0;
   for (const b of nearby(D._bh, xy, r)) if (b.h_ft > h && distToBuilding(xy, b) < r) h = b.h_ft;
   for (const ob of nearby(D._oh, xy, r)) if (ob.agl_ft > h && hyp(xy, ob.xy) < r) h = ob.agl_ft;
+  if (lidar) { const sf = surfaceNear(D, xy, r, true); if (sf && sf.ft > h) h = sf.ft; } // trees and unmapped structures
   return h;
 }
 const isBlocked = (D, xy, alt, o, r = o.clearM) => tallestNear(D, xy, r) > alt - o.obstacleVertFt;
 
 /**
- * Live constraints: stadium game windows ({ stadium, title, tfrStart, tfrEnd }) and TFRs ({ id, ring, effective, expire, lower_ft, upper_ft }).
+ * Live constraints: stadium game windows ({ stadium, title, tfrStart, tfrEnd }), TFRs ({ id, ring, effective, expire, lower_ft, upper_ft })
+ * and NOTAMs ({ id, kind, text, lon, lat, radius_nm, agl_ft, start, end }, from pipeline/notams.mjs).
  * `when` is the planned departure; both lists are optional and the score is unchanged without them.
  */
-export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', events = null, tfrs = [], when = new Date(), ...opt } = {}) {
+export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', events = null, tfrs = [], notams = [], when = new Date(), ...opt } = {}) {
   const o = { ...DEFAULTS, ...opt }, ac = typeof aircraft === 'string' ? AIRCRAFT[aircraft] : aircraft;
   index(D);
   const pts = route.map(p => D.proj(p)), alts = waypointAlts(route, altFt), rnd = rng(99);
@@ -248,11 +336,15 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   let lenM = 0, nextFoot = 0, overSum = 0, hi = 0, waterLandings = 0;
   const near = new Map();
   const tfrPolys = (tfrs || []).filter(t => t.ring?.length > 3).map(t => { const rings = [[t.ring.map(D.proj)]]; return { t, rings, bbox: bboxOf(rings) }; });
+  // Obstacle NOTAMs are points (often to the nearest minute, ~1.8 km); others reach their stated radius or 1 km.
+  const notamPts = (notams || []).map(n => ({ n, xy: D.proj([n.lon, n.lat]), r: n.radius_nm ? n.radius_nm * 1852 : n.kind === 'obstacle' ? o.notamObstacleM : 1000 }));
+  const notamHits = new Map();
   const sampleAt = (xy, along, alt) => {
     const d = density(D, xy, tod), fc = faaCategory(D, xy);
-    const cov = coverage(D, xy);
+    const cov = coverage(D, xy), sf = surfaceNear(D, xy, o.clearM), un = sf && surfaceNear(D, xy, o.clearM, true), tr = trafficAt(D, xy, alt);
     return { xy, ll: D.unproj(xy), along, alt, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: cov === 'water',
-      blocked: isBlocked(D, xy, alt, o), noData: cov === 'nodata' || cov === 'unloaded' };
+      blocked: isBlocked(D, xy, alt, o), noData: cov === 'nodata' || cov === 'unloaded',
+      surf: sf, unmapped: un, mapped: un ? tallestNear(D, xy, o.clearM, false) : 0, traffic: tr, land: landUse(D, xy), landing: nearOpenLand(D, xy, o.landingReachM) };
   };
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1], L = hyp(a, b), steps = Math.max(1, Math.ceil(L / o.sampleM));
@@ -281,6 +373,12 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
         }
       }
       for (const P of D.surface) if (inPolys(xy[0], xy[1], P)) air.set(`${P.props.name}`, { kind: 'surface', cls: P.props.class });
+      for (const P of notamPts) {
+        const dm = hyp(xy, P.xy);
+        if (dm > P.r || (P.n.kind === 'obstacle' && P.n.agl_ft != null && P.n.agl_ft <= alt - o.obstacleVertFt)) continue;
+        const active = (!P.n.start || when >= new Date(P.n.start)) && (!P.n.end || when <= new Date(P.n.end));
+        notamHits.set(P.n.id, { ...P.n, dm: Math.min(dm, notamHits.get(P.n.id)?.dm ?? Infinity), active });
+      }
       for (const T of tfrPolys) if (alt >= (T.t.lower_ft ?? 0) && alt <= (T.t.upper_ft ?? Infinity) && inPolys(xy[0], xy[1], T)) {
         const active = (!T.t.effective || when >= new Date(T.t.effective)) && (!T.t.expire || when <= new Date(T.t.expire));
         air.set(`TFR ${T.t.id}`, { kind: 'tfr', tfr: T.t, conditional: !active, active });
@@ -308,6 +406,8 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   const overCeiling = laanc.filter(s => s.alt > s.ceiling);
   const altMin = Math.min(...alts), altMax = Math.max(...alts);
   return {
+    ...lidarSummary(samples, o), ...trafficSummary(D, samples, ac, o), ...landSummary(samples, lenM),
+    climate: windClimate(D, samples[Math.floor(samples.length / 2)].xy, (altMin + altMax) / 2),
     ac, altFt, alts, altMin, altMax, levelled: altMin !== altMax, wind, tod, opt: o, samples, foot, footFrom, lenM, minutes: hours * 60, maxCat,
     meanD: samples.reduce((a, s) => a + s.d, 0) / samples.length, peakD: Math.max(...samples.map(s => s.d)),
     faaShare: samples.filter(s => s.faa).length / samples.length,
@@ -319,7 +419,56 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
     airspace: [...air.entries()].map(([name, v]) => ({ name, ...v })), noise, noiseSites: [...near.entries()].map(([s, db]) => ({ name: s.name, kind: s.kind, db })).sort((a, b) => b.db - a.db),
     laancShare: laanc.length / samples.length, minCeiling: laanc.length ? Math.min(...laanc.map(s => s.ceiling)) : null, overCeilingShare: overCeiling.length / samples.length,
     halfWidth55: noiseHalfWidth(altMin, ac),
+    notams: [...notamHits.values()].sort((a, b) => b.active - a.active || a.dm - b.dm),
   };
+}
+
+/** True if a park, field or cemetery lies within r metres of xy (3×3 grid cells for r up to one cell). */
+function nearOpenLand(D, xy, r) {
+  if (landUse(D, xy) == null) return null;
+  for (const [dx, dy] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r], [r * 0.7, r * 0.7], [-r * 0.7, r * 0.7], [r * 0.7, -r * 0.7], [-r * 0.7, -r * 0.7]])
+    if (OPEN_LAND.has(landUse(D, [xy[0] + dx, xy[1] + dy]))) return true;
+  return false;
+}
+/**
+ * Lidar conflicts: stretches where the surface within clearM rises to within obstacleVertFt of the route and no mapped
+ * building or obstacle explains it (mapped ones are reported from their own layers). Grouped into runs along the route.
+ */
+function lidarSummary(samples, o) {
+  const cov = samples.filter(s => s.surf);
+  const runs = [];
+  for (const s of samples) {
+    const u = s.unmapped, hit = u && u.ft > s.alt - o.obstacleVertFt && u.ft > s.mapped + o.obstacleVertFt;
+    const last = runs[runs.length - 1];
+    if (!hit) continue;
+    if (last && s.along - last.to <= o.sampleM * 1.5) { last.to = s.along; if (u.ft > last.ft) Object.assign(last, { ft: u.ft, kind: u.kind, ll: s.ll, alt: s.alt }); }
+    else runs.push({ from: s.along, to: s.along, ft: u.ft, kind: u.kind, ll: s.ll, alt: s.alt });
+  }
+  return { lidarShare: cov.length / samples.length, surfaceMaxFt: cov.length ? Math.max(...cov.map(s => s.surf.ft)) : null, surfaceHits: runs.sort((a, b) => b.ft - a.ft) };
+}
+/**
+ * Crewed traffic along the route at its altitude, and the expected rate of crewed aircraft passing within encounterKm
+ * in the same band: density × 2R × relative speed (the classic gas model), per flight hour.
+ */
+function trafficSummary(D, samples, ac, o) {
+  const T = D.traffic, tr = samples.filter(s => s.traffic);
+  if (!T || !tr.length) return { traffic: null };
+  const mean = tr.reduce((a, s) => a + s.traffic.rho, 0) / tr.length, peak = Math.max(...tr.map(s => s.traffic.rho));
+  const rotor = tr.reduce((a, s) => a + s.traffic.rotor, 0) / tr.length;
+  const band = tr[Math.floor(tr.length / 2)].traffic.band, v = Math.hypot(T.speed_ms[band], ac.spd) / 1000;
+  return { traffic: { mean, peak, rotorShare: mean ? rotor / mean : 0, band, bandFt: [T.bands_ft[band], T.bands_ft[band + 1]],
+    level: trafficLevel(D, mean, band), peakLevel: trafficLevel(D, peak, band), encountersPerFh: mean * 2 * o.encounterKm * v * 3600, days: T.days.length, hours: T.hours } };
+}
+/** Land-use mix under the route and the longest stretch with no park, field or cemetery within reach. */
+function landSummary(samples, lenM) {
+  const lu = samples.filter(s => s.land != null);
+  if (!lu.length) return { land: null };
+  const mix = {};
+  for (const s of lu) mix[s.land] = (mix[s.land] || 0) + 1 / lu.length;
+  let gap = 0, last = 0;
+  for (const s of samples) if (s.landing || s.water) { gap = Math.max(gap, s.along - last); last = s.along; }
+  gap = Math.max(gap, lenM - last);
+  return { land: { mix: Object.entries(mix).sort((a, b) => b[1] - a[1]), landingGapM: gap, landingShare: samples.filter(s => s.landing || s.water).length / samples.length } };
 }
 
 // ---------- Planning: clear buildings and obstacles ----------
@@ -450,6 +599,13 @@ export function findings(r) {
   const close = r.obstacles.length + r.buildings.length - hard.length - through.length;
   if (!hard.length && !through.length && close > 0) f.push(['warn', `${close} obstacles or buildings within ${r.opt.obstacleLateralM} m rise to within ${r.opt.obstacleVertFt} ft of the route's altitude.`]);
   if (r.levelled) f.push(['good', `Altitude varies from ${r.altMin} to ${r.altMax} ft AGL along the route.`]);
+  for (const h of r.surfaceHits || []) {
+    const near = h.ft >= h.alt ? 'reaches' : `rises to within ${r.opt.obstacleVertFt} ft of`;
+    f.push([h.ft >= h.alt ? 'crit' : 'warn', `Lidar: ${h.kind} ${near} the route's ${Math.round(h.alt)} ft level for ${Math.max(25, Math.round(h.to - h.from))} m near ${h.ll[1].toFixed(4)}, ${h.ll[0].toFixed(4)} (${h.ft} ft above ground, not in the mapped buildings or obstacle file).`]);
+    if (f.filter(x => x[1].startsWith('Lidar:')).length >= 3) { const more = r.surfaceHits.length - 3; if (more > 0) f.push(['warn', `Lidar: ${more} more stretch${more > 1 ? 'es' : ''} with trees or structures close to the route's level.`]); break; }
+  }
+  if (r.lidarShare === 0) f.push(['warn', 'No 3DEP lidar survey in the data covers this route, so trees and unmapped structures are not checked. Survey the corridor.']);
+  else if (r.lidarShare != null && r.lidarShare < 0.95) f.push(['warn', `3DEP lidar covers ${pct(r.lidarShare)} of the route; trees and unmapped structures on the rest are not checked.`]);
   const cranes = r.obstacles.filter(o => o.temporary);
   if (cranes.length) f.push(['warn', `${cranes.length} construction crane${cranes.length > 1 ? 's' : ''} mapped near the route. Cranes move; check FAA construction notices before each operation.`]);
   if (r.powerlines.length) f.push(['warn', `Route crosses or runs within ${r.opt.powerlineM} m of ${r.powerlines.length} mapped transmission line${r.powerlines.length > 1 ? 's' : ''} below ${r.opt.powerlineMaxFt} ft. Distribution lines are not in the public data.`]);
@@ -475,6 +631,25 @@ export function findings(r) {
   else if (r.hiFrac > 0.05) f.push(['warn', `${pct(r.hiFrac)} of simulated failure landings fall on ${dense}.`]);
   if (r.waterFrac > 0.2) f.push(['good', `${pct(r.waterFrac)} of simulated failure landings fall in water.`]);
   if (r.ecPerFh > 1e-6) f.push(['warn', `Estimated ${r.ecPerFh.toExponential(1)} ground fatalities per flight hour at the assumed failure rate, above the 1e-6 target often used in ground-risk assessments.`]);
+  const nts = (r.notams || []).filter(n => n.active);
+  for (const n of nts.slice(0, 3)) f.push(['warn', `NOTAM ${n.id} (${n.kind}, ${Math.round(n.dm)} m from the route): ${n.text.replace(/\s+/g, ' ').slice(0, 160)}${n.text.length > 160 ? '…' : ''}`]);
+  if (nts.length > 3) f.push(['warn', `${nts.length - 3} more active NOTAMs touch the route; see the package.`]);
+  if (r.traffic) {
+    const t = r.traffic, band = `${t.bandFt[0]}–${t.bandFt[1]} ft`, heli = t.rotorShare > 0.3 ? `, ${pct(t.rotorShare)} of it helicopters` : '';
+    const rate = t.encountersPerFh === 0 ? `no crewed aircraft were recorded at this level within ${r.opt.encounterKm} km`
+      : `about ${rateText(t.encountersPerFh)} crewed aircraft pass within ${r.opt.encounterKm} km per flight hour`;
+    const msg = `Crewed traffic at ${band} along the route is ${t.level} for the region (ADS-B, ${t.hours} sampled hours${heli}): ${rate}.`;
+    f.push([t.level === 'very high' || t.peakLevel === 'very high' ? 'crit' : t.level === 'high' ? 'warn' : 'good', msg + (t.peakLevel !== t.level ? ` Peaks ${t.peakLevel}.` : '')]);
+  }
+  if (r.land && r.land.landingGapM > 1000) {
+    const un = r.land.mix.find(([k]) => k === 'unmapped')?.[1] || 0;
+    f.push(['warn', `${(r.land.landingGapM / 1000).toFixed(1)} km of the route has no park, field, cemetery or water within ${r.opt.landingReachM} m for a contingency landing${un > 0.25 ? ` (OpenStreetMap has no land use for ${pct(un)} of the route, so a survey may find more)` : ''}.`]);
+  }
+  if (r.climate) {
+    const c = r.climate, mon = new Date(2000, c.worstMonth - 1).toLocaleString('en-US', { month: 'long' });
+    const o20 = c.over['20'];
+    f.push([o20 > 0.1 ? 'warn' : 'good', `HRRR ${c.year}: the 80 m (262 ft) wind here exceeds 20 kt in ${pct(o20)} of daytime hours, worst in ${mon} (${pct(c.worstOver20)}); at ${c.altFt} ft the median is ${c.p50} kt and the 90th percentile ${c.p90} kt.`]);
+  }
   if (r.wind.kt >= 20) f.push(['warn', `${r.wind.kt} kt wind: failure drift up to ${Math.round(r.wind.kt * 0.5144 * 1.5 * (r.altMax / FT / r.ac.descent))} m downwind. Set a wind limit in the operations manual.`]);
   if (r.noise.hospital) f.push(['warn', `${Math.round(r.noise.hospital)} dB at a hospital, above a 55 dB daytime target.`]);
   if (r.noise.school && r.tod !== 'night') f.push(['warn', `${Math.round(r.noise.school)} dB at ${r.noiseSites.filter(s => s.kind === 'school').length} school${r.noiseSites.filter(s => s.kind === 'school').length > 1 ? 's' : ''} during school hours.`]);
