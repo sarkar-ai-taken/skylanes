@@ -34,6 +34,10 @@
    "source": "FAA ADDS Class airspace, surface areas",
    "count": 5
   },
+  "class_b": {
+   "source": "FAA ADDS Class B shelves (all floors)",
+   "count": 7
+  },
   "op_categories": {
    "source": "FAA ADDS Operating Categories Map",
    "count": 10
@@ -45,6 +49,10 @@
    "total_residents": 872772,
    "total_jobs": 639508,
    "cell_m": 100
+  },
+  "lanes": {
+   "source": "OpenStreetMap highway=motorway|trunk|primary|secondary, scored with app/engine.js",
+   "count": 4573
   }
  }
 }

@@ -96,3 +96,17 @@ test('per-waypoint levels are honoured and interpolated', () => {
   const mid = r.samples[Math.floor(r.samples.length / 2)].alt;
   assert.ok(mid > 250 && mid < 350, `mid ${mid}`);
 });
+
+test('sky lanes: every piece has a valid tier, level and status, and drone lanes respect the clearance rule', async () => {
+  const { TIERS, LANE_STATUS, laneStatus } = await import('../app/engine.js');
+  const lanes = load('lanes');
+  assert.ok(lanes.length > 1000);
+  for (const ln of lanes.slice(0, 500)) {
+    assert.ok(TIERS[ln.t].levels.includes(ln.l));
+    assert.ok(LANE_STATUS[ln.s]);
+    assert.ok(ln.p.length >= 2);
+  }
+  // spot-check: a drone lane piece marked open is open at its midpoint
+  const open = lanes.filter(ln => ln.t === 0 && ln.s === 0).slice(0, 50);
+  for (const ln of open) { const m = ln.p[Math.floor(ln.p.length / 2)]; assert.equal(laneStatus(D, D.proj(m), ln.l, TIERS[0]), 'open'); }
+});

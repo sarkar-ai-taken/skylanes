@@ -1,6 +1,6 @@
 // The 3D sky: deck.gl layers drawn into the MapLibre map, from the same layers and scores the planner uses.
 // Heights are metres above ground (the basemap is flat), so 400 ft AGL sits at z = 122 m.
-import { FT } from './engine.js';
+import { FT, TIERS, LANE_STATUS, rng } from './engine.js';
 
 const { MapboxOverlay, SolidPolygonLayer, PolygonLayer, PathLayer, ColumnLayer, ScatterplotLayer, LineLayer, TripsLayer, TextLayer,
   LightingEffect, AmbientLight, DirectionalLight } = deck;
@@ -9,6 +9,9 @@ const CAT = { 1: [95, 194, 122], 2: [152, 208, 127], 3: [224, 162, 74], 4: [232,
 const TEAL = [82, 201, 162], RED = [239, 107, 92], AMBER = [242, 184, 75], WHITE = [230, 235, 238];
 // LAANC ceiling → colour: open sky teal, low ceilings amber, no auto-approval red.
 const GLASS = { depthWriteEnabled: false, depthMask: false };
+// Lane status colours: open in the tier colour; blocked and Category 5 red; over the LAANC ceiling orange; inside Class B violet.
+const STATUS_COLOR = { blocked: RED, ceiling: [235, 140, 80], cat5: RED, atc: [176, 140, 255] };
+const HEADWAY_M = 500; // one aircraft per 500 m of lane at 100% traffic
 const ceilColor = c => (c === 0 ? RED : c <= 100 ? [235, 140, 80] : c <= 200 ? AMBER : c <= 300 ? [150, 200, 140] : TEAL);
 
 const lighting = new LightingEffect({
@@ -42,6 +45,35 @@ export function createScene(map, D, raw) {
   map.addControl(overlay);
   let r = null, route = [], visible = true, t0 = performance.now(), raf = 0;
 
+  // Sky lanes: pieces in 3D, each with metre lengths for placing traffic.
+  const lanes = (raw.lanes || []).map(ln => {
+    const z = ln.l / FT, xy = ln.p.map(q => D.proj(q)), cum = [0];
+    for (let i = 1; i < xy.length; i++) cum.push(cum[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+    return { ...ln, p3: ln.p.map(q => [q[0], q[1], z]), xy, cum, len: cum[cum.length - 1], z, status: LANE_STATUS[ln.s], rev: TIERS[ln.t].levels.indexOf(ln.l) === 1 };
+  });
+  const net = { on: true, tiers: TIERS.map(() => true), pct: 25, shown: [], vehicles: [] };
+  function refreshNet() {
+    net.shown = net.on ? lanes.filter(ln => net.tiers[ln.t]) : [];
+    // Traffic fills open lanes only: pct of capacity, placed by length, deterministic per setting.
+    const open = net.shown.filter(ln => ln.status === 'open'), cap = open.reduce((a, ln) => a + Math.floor(ln.len / HEADWAY_M), 0);
+    const n = Math.round(cap * net.pct / 100), rnd = rng(7), total = open.reduce((a, ln) => a + ln.len, 0);
+    net.vehicles = [];
+    for (let k = 0; k < n && total; k++) {
+      let x = rnd() * total, i = 0; while (x > open[i].len) { x -= open[i].len; i++; }
+      net.vehicles.push({ ln: open[i], off: x, spd: TIERS[open[i].t].spd * (0.85 + rnd() * 0.3) });
+    }
+    net.capacity = cap;
+  }
+  refreshNet();
+  // Position along a lane piece at distance d (wrapping), as [lon, lat, z]; one-way per level.
+  function along(ln, d) {
+    let s = ((d % ln.len) + ln.len) % ln.len; if (ln.rev) s = ln.len - s;
+    let i = 1; while (i < ln.cum.length - 1 && ln.cum[i] < s) i++;
+    const f = (s - ln.cum[i - 1]) / ((ln.cum[i] - ln.cum[i - 1]) || 1), a = ln.p3[i - 1], b = ln.p3[i];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, ln.z];
+  }
+  const laneColor = (ln, a) => [...(STATUS_COLOR[ln.status] || TIERS[ln.t].color), a];
+
   // Static layers: built once.
   const ceilings = raw.airspace.facility_map.map(f => ({ poly: f.geometry.type === 'Polygon' ? f.geometry.coordinates : f.geometry.coordinates[0], c: f.properties.ceiling_ft }));
   const cat5 = raw.airspace.operating_categories.filter(f => f.properties.category === 5).flatMap(f => f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates);
@@ -68,6 +100,17 @@ export function createScene(map, D, raw) {
     ];
     if (r?.tod === 'event') L.push(new ColumnLayer({ id: 'tfr', data: stadiums, diskResolution: 64, radius: 5556, extruded: true, wireframe: true,
       getPosition: s => [s.lon, s.lat], getElevation: 914, getFillColor: [...AMBER, 10], getLineColor: [...AMBER, 50], parameters: GLASS }));
+    if (net.shown.length) {
+      L.push(new PathLayer({ id: 'lanes-slab', data: net.shown, getPath: ln => ln.p3, getColor: ln => laneColor(ln, ln.status === 'open' ? 34 : 46), getWidth: 36, widthMinPixels: 2, parameters: GLASS, updateTriggers: { getColor: net.shown.length } }));
+      L.push(new PathLayer({ id: 'lanes-core', data: net.shown, getPath: ln => ln.p3, getColor: ln => laneColor(ln, ln.status === 'open' ? 170 : 210), getWidth: 2, widthMinPixels: 1, parameters: GLASS }));
+    }
+    if (net.vehicles.length) {
+      const sec = (now - t0) / 1000;
+      const heads = net.vehicles.map(v => ({ v, p: along(v.ln, v.off + v.spd * sec), q: along(v.ln, v.off + v.spd * (sec - 4)) }));
+      L.push(new LineLayer({ id: 'traffic-trail', data: heads.filter(h => Math.hypot(h.p[0] - h.q[0], h.p[1] - h.q[1]) < 0.01), getSourcePosition: h => h.q, getTargetPosition: h => h.p,
+        getColor: h => [...TIERS[h.v.ln.t].color, 150], getWidth: 2, parameters: GLASS }));
+      L.push(new ScatterplotLayer({ id: 'traffic', data: heads, getPosition: h => h.p, getRadius: 9, radiusMinPixels: 2, getFillColor: h => [...TIERS[h.v.ln.t].color.map(c => Math.min(255, c + 60)), 255] }));
+    }
     if (!r) return L;
 
     const pts = route, last = r.samples.length - 1;
@@ -112,7 +155,8 @@ export function createScene(map, D, raw) {
   function frame(now) {
     if (!visible) return;
     overlay.setProps({ layers: layers(now) });
-    raf = r && !matchMedia('(prefers-reduced-motion: reduce)').matches ? requestAnimationFrame(frame) : 0;
+    const moving = r || net.vehicles.length;
+    raf = moving && !matchMedia('(prefers-reduced-motion: reduce)').matches ? requestAnimationFrame(frame) : 0;
   }
   const kick = () => { cancelAnimationFrame(raf); frame(performance.now()); };
 
@@ -120,5 +164,7 @@ export function createScene(map, D, raw) {
     update(result, path) { r = result; route = path; t0 = performance.now(); kick(); },
     setVisible(v) { visible = v; if (!v) { cancelAnimationFrame(raf); overlay.setProps({ layers: [] }); } else kick(); },
     tooltip: overlay,
+    /** on/off, per-tier visibility, traffic percent. Returns vehicles airborne and capacity. */
+    setNetwork({ on = net.on, tiers = net.tiers, pct = net.pct } = {}) { Object.assign(net, { on, tiers, pct }); refreshNet(); kick(); return { airborne: net.vehicles.length, capacity: net.capacity }; },
   };
 }

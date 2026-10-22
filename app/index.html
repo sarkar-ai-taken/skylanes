@@ -72,6 +72,17 @@ body[data-view="3d"] .layers,body[data-view="3d"] .legendplan,body:not([data-vie
 .levels-pick button{padding:3px 7px;font-family:var(--mono);font-size:12px}.levels-pick button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .levels-pick .link{border:0;background:none;padding:0;color:var(--muted);text-decoration:underline}
 .maplibregl-popup-close-button{color:var(--fg)}
+.skypanel{position:absolute;top:52px;left:10px;z-index:2;width:min(330px,calc(100% - 70px));background:rgba(18,25,32,.88);color:#e6ebee;border:1px solid #2a3642;border-radius:6px;padding:8px 10px;font-size:12px}
+.skypanel summary{display:flex;gap:8px;align-items:baseline;cursor:pointer;list-style:none}.skypanel summary::-webkit-details-marker{display:none}
+.skypanel .sw{font-weight:600;font-size:13px;display:flex;gap:6px;align-items:center}.skypanel .note{color:#8c9aa6}
+.tier{display:grid;grid-template-columns:auto 10px 1fr;gap:2px 8px;align-items:center;margin-top:8px}
+.tier i{width:10px;height:10px;border-radius:2px}.tier b{font-weight:500}.tier .km{grid-column:3;color:#8c9aa6;font-family:var(--mono);font-size:11px}
+.tier .tag{font-family:var(--mono);font-size:10px;color:#8c9aa6;border:1px solid #2a3642;border-radius:3px;padding:0 4px;margin-left:4px}
+.sp-key{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:8px;color:#8c9aa6;font-size:11px}.sp-key span{display:flex;gap:4px;align-items:center}.sp-key i{width:10px;height:3px;display:inline-block}
+.sp-traffic{display:flex;gap:8px;align-items:center;margin-top:8px;border-top:1px solid #2a3642;padding-top:8px}
+.sp-traffic select{background:#121920;color:#e6ebee;border-color:#2a3642;padding:3px 6px}
+body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
+@media(max-width:600px){.skypanel:not([open]){width:auto}}
 .toast{max-width:min(520px,calc(100vw - 32px));position:fixed;bottom:16px;right:16px;background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:4px;font-size:13px;z-index:10}
 .maplibregl-popup-content{background:var(--panel);color:var(--fg);font-family:var(--font);font-size:12px}
 .loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--panel);z-index:3;color:var(--muted)}
@@ -90,6 +101,14 @@ body[data-view="3d"] .layers,body[data-view="3d"] .legendplan,body:not([data-vie
       <div id="map" role="application" aria-label="Seattle route map"></div>
       <div class="loading" id="loading">Loading census, FAA and OSM layers…</div>
       <div class="hint" id="hint">Click to place waypoints. Double-click to finish.</div>
+      <details class="skypanel" id="skypanel" open>
+        <summary><label class="sw" onclick="event.stopPropagation()"><input type="checkbox" id="lanesOn" checked> Sky lanes</label><span class="note">air roads over arterials</span></summary>
+        <div id="tierRows"></div>
+        <div class="sp-key"><span><i style="background:#ef6b5c"></i>blocked / Cat 5</span><span><i style="background:#eb8c50"></i>over ceiling</span><span><i style="background:#b08cff"></i>needs ATC</span></div>
+        <div class="sp-traffic"><label for="traffic">Traffic</label>
+          <select id="traffic" autocomplete="off"><option value="0">Off</option><option value="10">10%</option><option value="25" selected>25%</option><option value="50">50%</option><option value="100">100%</option></select>
+          <span class="note" id="vehCount"></span></div>
+      </details>
       <div class="legend legend3d">
         <span><i style="background:#52c9a2;opacity:.6"></i>Open to 400 ft</span><span><i style="background:#f2b84b;opacity:.7"></i>Low ceiling</span><span><i style="background:#ef6b5c"></i>No auto-approval / Cat 5</span>
         <span><i style="background:#e6ebee;width:3px"></i>Obstacle</span><span><i style="background:#52c9a2"></i>Lane</span><span><i style="background:#ef6b5c;opacity:.5;border-radius:50%"></i>Failure landing</span>

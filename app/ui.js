@@ -1,5 +1,5 @@
 // Map, controls and rail. All scoring lives in engine.js; all document text in package.js.
-import { AIRCRAFT, WIND_PRESETS, TOD, FT, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, MAX_ALT_FT } from './engine.js';
+import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, MAX_ALT_FT } from './engine.js';
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
 import { createScene } from './scene3d.js';
@@ -10,7 +10,7 @@ const dark = () => document.documentElement.dataset.theme === 'dark' || (documen
 const fc = features => ({ type: 'FeatureCollection', features });
 const pt = (c, p = {}) => ({ type: 'Feature', properties: p, geometry: { type: 'Point', coordinates: c } });
 
-const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings'];
+const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings', 'lanes'];
 const raw = Object.fromEntries(await Promise.all(files.map(async n => [n, await (await fetch(`data/${n}.json`)).json()])));
 const D = prepare(raw);
 const M = raw.manifest;
@@ -82,6 +82,9 @@ map.on('load', () => {
   map.addLayer({ id: 'foot', type: 'circle', source: 'foot', paint: { 'circle-radius': 2, 'circle-color': css('--crit'), 'circle-opacity': 0.35 } });
   map.addLayer({ id: 'routeSeg', type: 'line', source: 'routeSeg', layout: { 'line-cap': 'round' },
     paint: { 'line-width': 5, 'line-color': ['match', ['get', 'c'], 1, css('--good'), 2, css('--c2'), 3, css('--warn'), 4, css('--c4'), 5, css('--crit'), css('--accent')] } });
+  map.addSource('lanes2d', { type: 'geojson', data: fc(raw.lanes.filter(ln => ln.t === 0 && ln.l === TIERS[0].levels[0]).map(ln => ({ type: 'Feature', properties: { s: LANE_STATUS[ln.s] }, geometry: { type: 'LineString', coordinates: ln.p } }))) });
+  map.addLayer({ id: 'lanes2d', type: 'line', source: 'lanes2d', layout: { 'line-cap': 'round' },
+    paint: { 'line-width': 3, 'line-opacity': 0.55, 'line-color': ['match', ['get', 's'], 'open', '#52c9a2', 'ceiling', '#eb8c50', '#ef6b5c'] } }, 'foot');
   map.addLayer({ id: 'routeBlocked', type: 'line', source: 'routeSeg', filter: ['==', ['get', 'b'], true], layout: { 'line-cap': 'round' },
     paint: { 'line-width': 11, 'line-color': css('--crit'), 'line-opacity': 0.55 } }, 'routeSeg');
   map.addLayer({ id: 'wps', type: 'circle', source: 'wps', paint: { 'circle-radius': 6, 'circle-color': css('--accent'), 'circle-stroke-color': css('--panel'), 'circle-stroke-width': 2 } });
@@ -219,9 +222,29 @@ function setView(v) {
   else document.querySelectorAll('[data-layer]').forEach(applyLayer);
   map.setPaintProperty('density', 'raster-opacity', v === '3d' ? 0.12 : 0.75);
   scene.setVisible(v === '3d');
+  applyNetwork();
   map.easeTo(v === '3d' ? { pitch: 60, bearing: -20, duration: 800 } : { pitch: 0, bearing: 0, duration: 800 });
 }
 $('view').onclick = () => scene && setView(view === '3d' ? 'plan' : '3d');
+
+// ---------- Sky lanes panel ----------
+const laneKm = laneStats(raw.lanes, D), tierOn = TIERS.map(() => true);
+$('tierRows').innerHTML = TIERS.map((t, i) => {
+  const k = laneKm[i], open = k[0], shut = k.slice(1).reduce((a, b) => a + b, 0);
+  const why = LANE_STATUS.slice(1).map((s, j) => k[j + 1] >= 1 ? `${Math.round(k[j + 1])} ${{ blocked: 'blocked', ceiling: 'over ceiling', cat5: 'Cat 5', atc: 'needs ATC' }[s]}` : '').filter(Boolean).join(' · ');
+  return `<label class="tier"><input type="checkbox" data-tier="${i}" checked><i style="background:rgb(${t.color})"></i>
+    <span><b>${t.name}</b> ${t.levels.join(' / ')} ft<span class="tag">${t.today ? 'today' : '2035 scenario'}</span></span>
+    <span class="km">${Math.round(open)} km open${shut >= 1 ? ' · ' + why : ''}</span></label>`;
+}).join('');
+function applyNetwork() {
+  const on = $('lanesOn').checked;
+  document.querySelectorAll('[data-tier]').forEach(cb => (tierOn[+cb.dataset.tier] = cb.checked));
+  map.setLayoutProperty('lanes2d', 'visibility', on && tierOn[0] && view !== '3d' ? 'visible' : 'none');
+  const { airborne, capacity } = scene.setNetwork({ on, tiers: tierOn.slice(), pct: +$('traffic').value });
+  $('vehCount').textContent = on ? `${airborne.toLocaleString()} airborne of ${capacity.toLocaleString()} capacity` : '';
+}
+['lanesOn', 'traffic'].forEach(id => $(id).addEventListener('change', applyNetwork));
+$('tierRows').addEventListener('change', applyNetwork);
 
 // ---------- Scoring → map + rail + doc ----------
 let lastTod = 'day';

@@ -108,6 +108,8 @@ def main():
                               'way["building:part"]["height"](if:number(t["height"])>=20);out geom tags;'
                               'way["building:part"]["building:levels"](if:number(t["building:levels"])>=6);out geom tags;'
                               'relation["building:part"]["height"](if:number(t["height"])>=20);out geom tags;')
+    # Arterial roads: the air-road network follows them (fewer people below, noise masked by traffic).
+    overpass("osm_roads", 'way["highway"~"^(motorway|trunk|primary|secondary)$"];out geom tags;')
 
 
 if __name__ == "__main__":

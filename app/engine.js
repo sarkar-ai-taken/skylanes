@@ -60,6 +60,7 @@ export function prepare({ grid, obstacles, powerlines, sites, airspace, manifest
     facility: polys(airspace.facility_map),
     surface: polys(airspace.surface_areas),
     opcats: polys(airspace.operating_categories),
+    classB: polys(airspace.class_b || []),
   };
 }
 
@@ -428,4 +429,77 @@ export function intendedArea(D, r) {
   let area = 0;
   for (let i = 0; i < ring.length; i++) { const a = ring[i], b = ring[(i + 1) % ring.length]; area += a[0] * b[1] - b[0] * a[1]; }
   return { ring: [...ring, ring[0]].map(D.unproj), km2: Math.abs(area) / 2 / 1e6 };
+}
+
+// ---------- Sky lanes: the air-road network ----------
+// Lanes follow arterial roads (fewer people below, noise masked by traffic). Each tier has one level per direction,
+// so opposing traffic never shares a level. Only the drone tier is flyable under today's rules; the upper tiers are a
+// 2035 scenario drawn for planning conversations.
+export const TIERS = [
+  { id: 'drone', name: 'Drone lanes', levels: [250, 350], roads: ['motorway', 'trunk', 'primary', 'secondary'], spd: 18, color: [82, 201, 162], today: true },
+  { id: 'taxi', name: 'Air-taxi lanes', levels: [800, 1000], roads: ['motorway', 'trunk'], spd: 55, color: [106, 169, 255], today: false },
+  { id: 'personal', name: 'Personal flight', levels: [1600, 2000], roads: ['motorway'], spd: 70, color: [242, 184, 75], today: false },
+];
+export const LANE_STATUS = ['open', 'blocked', 'ceiling', 'cat5', 'atc'];
+
+/** Why a lane at levelFt cannot be flown at xy: 'blocked' by a structure, over the LAANC 'ceiling', over 'cat5' ground, inside Class B ('atc'), else 'open'. */
+export function laneStatus(D, xy, levelFt, tier, o = DEFAULTS) {
+  if (isBlocked(D, xy, levelFt, o)) return 'blocked';
+  if (tier.today) {
+    const c = facilityCeiling(D, xy);
+    if (c != null && levelFt > c) return 'ceiling';
+    if (faaCategory(D, xy) === 5) return 'cat5';
+  } else if (D.classB.some(P => P.props.lower_ft <= levelFt && inPolys(xy[0], xy[1], P))) return 'atc';
+  return 'open';
+}
+
+/** Douglas–Peucker in metres. */
+function simplify(pts, tol) {
+  if (pts.length < 3) return pts;
+  let idx = 0, max = 0;
+  for (let i = 1; i < pts.length - 1; i++) { const d = segDist(pts[i], pts[0], pts[pts.length - 1]); if (d > max) { max = d; idx = i; } }
+  if (max <= tol) return [pts[0], pts[pts.length - 1]];
+  return [...simplify(pts.slice(0, idx + 1), tol).slice(0, -1), ...simplify(pts.slice(idx), tol)];
+}
+
+/**
+ * Build every lane piece: roads → simplified paths → one path per tier level, split into runs of equal status.
+ * roads: [{ highway, coords: [[lon, lat], ...] }]. Returns [{ t: tier index, l: level ft, s: status index, p: [[lon, lat], ...] }].
+ */
+export function buildLanes(D, roads, { stepM = 25, tolM = 12, minM = 120 } = {}) {
+  index(D);
+  const out = [];
+  for (const road of roads) {
+    const xy = simplify(road.coords.map(c => D.proj(c)), tolM);
+    let len = 0; for (let i = 0; i < xy.length - 1; i++) len += hyp(xy[i], xy[i + 1]);
+    if (len < minM) continue;
+    // resample once; every tier level walks the same points
+    const pts = [];
+    for (let i = 0; i < xy.length - 1; i++) {
+      const n = Math.max(1, Math.ceil(hyp(xy[i], xy[i + 1]) / stepM));
+      for (let k = 0; k < n; k++) pts.push([xy[i][0] + (xy[i + 1][0] - xy[i][0]) * k / n, xy[i][1] + (xy[i + 1][1] - xy[i][1]) * k / n]);
+    }
+    pts.push(xy[xy.length - 1]);
+    TIERS.forEach((tier, t) => {
+      if (!tier.roads.includes(road.highway)) return;
+      for (const l of tier.levels) {
+        let run = [pts[0]], st = laneStatus(D, pts[0], l, tier);
+        const flush = () => { if (run.length > 1) out.push({ t, l, s: LANE_STATUS.indexOf(st), p: simplify(run, 3).map(q => D.unproj(q).map(v => +v.toFixed(5))) }); };
+        for (let i = 1; i < pts.length; i++) {
+          const s2 = laneStatus(D, pts[i], l, tier);
+          run.push(pts[i]);
+          if (s2 !== st) { flush(); run = [pts[i]]; st = s2; }
+        }
+        flush();
+      }
+    });
+  }
+  return out;
+}
+
+/** Kilometres of lane per tier and status. */
+export function laneStats(lanes, D) {
+  const km = TIERS.map(() => LANE_STATUS.map(() => 0));
+  for (const ln of lanes) { let m = 0; for (let i = 0; i < ln.p.length - 1; i++) m += hyp(D.proj(ln.p[i]), D.proj(ln.p[i + 1])); km[ln.t][ln.s] += m / 1000; }
+  return km;
 }

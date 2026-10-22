@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "build-data": ".venv/bin/python pipeline/fetch.py && .venv/bin/python pipeline/build.py",
+    "build-data": ".venv/bin/python pipeline/fetch.py && .venv/bin/python pipeline/build.py && node pipeline/lanes.mjs",
     "serve": "python3 -m http.server 8080 -d app"
   },
   "license": "MIT"

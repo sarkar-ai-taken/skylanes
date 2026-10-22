@@ -9,6 +9,11 @@ Routes are tested against real building footprints (OSM, incl. tower parts) and 
 (click it on the map), and two planners fix conflicts: **Climb over** raises only the legs that need it, within 400 ft
 and the LAANC ceiling; **Go around** finds a path around buildings at the current level (A* on a 15 m grid).
 
+**Sky lanes** (switch on the map): an air-road network over OSM arterials in three tiers, one level per direction:
+drones at 250 / 350 ft (flyable today), air taxis at 800 / 1000 ft and personal flight at 1600 / 2000 ft (2035 scenario).
+Every stretch is scored with the same engine: open, blocked by a structure, over the LAANC ceiling, over Category 5
+ground, or inside Class B (needs ATC). A traffic control fills open lanes to 0–100% of capacity (one aircraft per 500 m).
+
 **Live:** https://sarkar-ai-taken.github.io/skylanes/ · no sign-up, no API keys, runs entirely in the browser.
 Every analysis is a shareable link (the route and settings live in the URL).
 
@@ -53,6 +58,7 @@ run `npm run build-data`, commit `app/data/`, and update the initial map bounds 
 | Controlled airspace | FAA UAS Facility Map grids, FAA Class airspace surface areas |
 | Heliports, airports, stadiums | FAA ADDS + OSM |
 | Hospitals, schools | OSM |
+| Sky-lane network | OSM `highway=motorway/trunk/primary/secondary`, scored by `pipeline/lanes.mjs` |
 | Wind | NWS api.weather.gov, KBFI latest observation (live) or presets |
 | Basemap and 3D buildings | OpenFreeMap (OpenMapTiles) |
 

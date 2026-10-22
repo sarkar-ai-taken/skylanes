@@ -273,12 +273,16 @@ def build_airspace():
     surf = clip({"features": [f for f in json.load(open(RAW / "class_airspace.geojson"))["features"]
                               if f["properties"]["CLASS"] in ("B", "C", "D") and (f["properties"]["LOWER_VAL"] or 0) == 0]},
                 lambda p: {"name": p["NAME"], "class": p["CLASS"], "upper_ft": p["UPPER_VAL"]})
+    # Class B shelves at every floor: the upper sky-lane tiers sit inside them and need ATC clearance.
+    shelves = clip({"features": [f for f in json.load(open(RAW / "class_airspace.geojson"))["features"] if f["properties"]["CLASS"] == "B"]},
+                   lambda p: {"name": p["NAME"], "lower_ft": p["LOWER_VAL"] or 0, "upper_ft": p["UPPER_VAL"]})
     cats = clip(json.load(open(RAW / "faa_operating_categories.geojson")),
                 lambda p: {"category": int(p["POP_DENSITY"].split()[-1])})
-    out = {"facility_map": fm, "surface_areas": surf, "operating_categories": cats}
+    out = {"facility_map": fm, "surface_areas": surf, "operating_categories": cats, "class_b": shelves}
     (OUT / "airspace.json").write_text(json.dumps(out))
     note("facility_map", "FAA UAS Facility Map (LAANC ceilings)", len(fm))
     note("surface", "FAA ADDS Class airspace, surface areas", len(surf))
+    note("class_b", "FAA ADDS Class B shelves (all floors)", len(shelves))
     note("op_categories", "FAA ADDS Operating Categories Map", len(cats))
 
 
