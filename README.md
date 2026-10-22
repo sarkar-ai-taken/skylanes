@@ -36,7 +36,11 @@ Set up the pipeline once: `python3 -m venv .venv && .venv/bin/pip install shapel
 
 - **Plan a route** (`index.html`): the safety-case planner above.
 - **Ride** (`ride.html`): pick two concept vertiports and fly an air taxi on the 800 / 1,000 ft lanes, with chase, cabin
-  and orbit cameras, a heads-up display and a car-time comparison. A 2035 concept on today's map.
+  and orbit cameras, a heads-up display and a car-time comparison. A 2035 concept on today's map. Take over with the
+  arrow keys, WASD or the on-screen pad: left / right and up / down steer inside the 80 m × 200 ft lane box while the
+  autopilot keeps the speed; pushing past an edge is refused with an error and that edge lights red. Virtual traffic
+  signals sit at the busiest lane junctions (at least 2 km apart); the taxi brakes for red and holds before the gate
+  (`app/ride-sim.js`, deterministic, tested).
 - **Fleet** (`fleet.html`): place a warehouse, set drones, order rate, radius and delivery promise. Orders arrive at
   census-weighted homes; each is checked by the engine (range, Category 5 drop, airspace approval, buildings, stadium
   TFRs) and either dispatched, rerouted, flown lower or refused with a reason. Playback in 3D with KPIs and charts

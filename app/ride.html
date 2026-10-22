@@ -71,9 +71,25 @@ body.arrived .arrive{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-e
 .expand input{flex:1;min-width:0}
 .expand .fine{font-size:11px;color:var(--muted);margin-top:6px}
 .note{font-size:11px;color:var(--muted)}
+.hud #hSig[data-state="green"]{color:#46e678}.hud #hSig[data-state="amber"]{color:var(--warn)}.hud #hSig[data-state="red"]{color:var(--crit)}
+/* taking over: a D-pad, the lane-box status and the out-of-lane error */
+.pad{position:fixed;left:16px;bottom:22px;z-index:5;display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);gap:4px;opacity:0;pointer-events:none;transition:opacity .4s}
+body.flying .pad{opacity:1;pointer-events:auto}
+.pad button{padding:0;font-size:18px;line-height:1;background:var(--panel);backdrop-filter:blur(8px);touch-action:none;user-select:none;-webkit-user-select:none}
+.pad button:active{background:rgba(106,169,255,.35)}
+.pad [data-dir=up]{grid-area:1/2}.pad [data-dir=left]{grid-area:2/1}.pad [data-dir=right]{grid-area:2/3}.pad [data-dir=down]{grid-area:3/2}
+.pad #autopilot{grid-area:2/2;font-size:10px;font-family:var(--mono);letter-spacing:.04em}
+body.manual .pad #autopilot{border-color:var(--taxi);color:var(--taxi)}
+.ctlbar{position:fixed;left:16px;bottom:172px;z-index:5;font-size:12px;color:var(--muted);opacity:0;transition:opacity .4s;text-shadow:0 1px 6px #000}
+body.flying .ctlbar{opacity:1}
+.ctlbar b{color:var(--fg);font-weight:500}
+body.manual .ctlbar b{color:var(--taxi)}
+.alert{position:fixed;left:50%;top:64px;transform:translate(-50%,-8px);width:max-content;max-width:calc(100vw - 32px);background:rgba(120,24,18,.92);border:1px solid var(--crit);color:#fff;border-radius:10px;padding:10px 14px;font-size:13px;z-index:7;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none}
+body.fault .alert{opacity:1;transform:translate(-50%,0)}
+body.fault .vignette{background:radial-gradient(ellipse at center,transparent 50%,rgba(200,30,20,.35))}
 .loading{position:fixed;inset:0;display:grid;place-items:center;z-index:9;background:var(--bg);color:var(--muted);transition:opacity .5s}
 .maplibregl-ctrl-attrib{font-size:10px}
-@media(max-width:640px){.hud div{padding:0 8px}.hud b{font-size:16px}.card{top:56px}}
+@media(max-width:640px){.hud div{padding:0 8px}.hud b{font-size:16px}.card{top:56px}.hud{bottom:auto;top:56px}.alert{top:124px}}
 @media(prefers-reduced-motion:reduce){.card,.hud,.arrive{transition:none}}
 </style>
 </head>
@@ -102,7 +118,17 @@ body.arrived .arrive{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-e
   <div><small>Speed</small><b id="hSpd">0</b> kt</div>
   <div><small>To go</small><b id="hDist">–</b> km</div>
   <div><small>Arrive in</small><b id="hEta">–</b></div>
+  <div><small>Next signal</small><b id="hSig">–</b></div>
 </div>
+<div class="ctlbar"><b id="hCtl">Autopilot</b> · arrows or WASD to steer, space for autopilot</div>
+<div class="pad" role="group" aria-label="Steer within the lane">
+  <button data-dir="up" aria-label="Climb">↑</button>
+  <button data-dir="left" aria-label="Steer left">←</button>
+  <button id="autopilot" aria-label="Hand back to autopilot">AUTO</button>
+  <button data-dir="right" aria-label="Steer right">→</button>
+  <button data-dir="down" aria-label="Descend">↓</button>
+</div>
+<div class="alert" id="alert" role="alert"></div>
 <div class="controls">
   <button data-cam="chase" aria-pressed="true">Chase view</button>
   <button data-cam="cabin" aria-pressed="false">Cabin view</button>
