@@ -529,3 +529,55 @@ export function laneStats(lanes, D) {
   for (const ln of lanes) { let m = 0; for (let i = 0; i < ln.p.length - 1; i++) m += hyp(D.proj(ln.p[i]), D.proj(ln.p[i + 1])); km[ln.t][ln.s] += m / 1000; }
   return km;
 }
+
+// ---------- Routing on the lane network ----------
+/**
+ * Graph of one tier's flyable lane pieces at one level. Piece ends within snapM metres join, which is how separate
+ * OSM ways meet at junctions. Returns { nodes: [[x, y]], adj: Map(node → [{ to, w, piece, fwd }]) }.
+ */
+export function laneGraph(D, lanes, tier, level, { snapM = 150, statuses = ['open', 'atc'] } = {}) {
+  const pieces = lanes.filter(ln => ln.t === tier && ln.l === level && statuses.includes(LANE_STATUS[ln.s]));
+  const nodes = [], hash = new Map(), adj = new Map();
+  const nodeAt = xy => {
+    const k = (i, j) => i + ',' + j, ci = Math.floor(xy[0] / snapM), cj = Math.floor(xy[1] / snapM);
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const n of hash.get(k(ci + di, cj + dj)) || []) if (hyp(nodes[n], xy) < snapM) return n;
+    nodes.push(xy); const n = nodes.length - 1;
+    if (!hash.has(k(ci, cj))) hash.set(k(ci, cj), []); hash.get(k(ci, cj)).push(n); adj.set(n, []);
+    return n;
+  };
+  for (const ln of pieces) {
+    const xy = ln.p.map(q => D.proj(q)); let w = 0; for (let i = 1; i < xy.length; i++) w += hyp(xy[i - 1], xy[i]);
+    const a = nodeAt(xy[0]), b = nodeAt(xy[xy.length - 1]);
+    if (a === b) continue;
+    adj.get(a).push({ to: b, w, xy, fwd: true }); adj.get(b).push({ to: a, w, xy, fwd: false });
+  }
+  return { nodes, adj };
+}
+
+/**
+ * Path from `from` to `to` ([lon, lat]) along the lane graph, entering and leaving at the nearest lane nodes.
+ * Falls back to a direct line when the lanes would more than double the distance or do not connect.
+ * Returns { path: [[lon, lat]], onLanesM, totalM, direct: bool }.
+ */
+export function routeOnLanes(D, G, from, to, { maxDetour = 2 } = {}) {
+  const A = D.proj(from), B = D.proj(to), direct = hyp(A, B);
+  const nearest = p => { let best = -1, d = Infinity; G.nodes.forEach((q, i) => { const e = hyp(p, q); if (e < d) { d = e; best = i; } }); return [best, d]; };
+  const [s, ds] = nearest(A), [t, dt] = nearest(B);
+  const straight = { path: [from, to], onLanesM: 0, totalM: direct, direct: true };
+  if (s < 0 || t < 0 || s === t) return straight;
+  const dist = new Map([[s, 0]]), prev = new Map(), done = new Set(), heap = [[0, s]];
+  while (heap.length) {
+    heap.sort((a, b) => a[0] - b[0]);
+    const [d, n] = heap.shift();
+    if (done.has(n)) continue; done.add(n);
+    if (n === t) break;
+    for (const e of G.adj.get(n)) { const nd = d + e.w; if (nd < (dist.get(e.to) ?? Infinity)) { dist.set(e.to, nd); prev.set(e.to, { n, e }); heap.push([nd, e.to]); } }
+  }
+  if (!dist.has(t)) return straight;
+  const total = ds + dist.get(t) + dt;
+  if (total > direct * maxDetour) return straight;
+  const legs = [];
+  for (let n = t; n !== s;) { const { n: p, e } = prev.get(n); legs.unshift(e.fwd ? e.xy : e.xy.slice().reverse()); n = p; }
+  const xy = [A, ...legs.flatMap((l, i) => (i ? l.slice(1) : l)), B];
+  return { path: xy.map(D.unproj), onLanesM: dist.get(t), totalM: total, direct: false };
+}

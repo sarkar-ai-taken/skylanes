@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skylanes Ride</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath d=%27M2 13 L7 6 L10 9 L14 3%27 fill=%27none%27 stroke=%27%236aa9ff%27 stroke-width=%272.5%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Layout: a full-bleed flight. Booking card left, flight display along the bottom, cabin frame over everything in cabin view. */
+:root{
+  --bg:#0a0f14; --panel:rgba(14,20,27,.82); --fg:#eef2f5; --muted:#93a1ad; --line:rgba(255,255,255,.12);
+  --taxi:#6aa9ff; --accent:#52c9a2; --warn:#f2b84b; --crit:#ef6b5c;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:var(--font);font-size:14px;overflow:hidden}
+#map{position:fixed;inset:0;background:linear-gradient(#0f1b2e 0%,#2a3550 45%,#d9895a 72%,#0a0f14 73%)}
+.pages{display:flex;gap:4px}
+.pages a{color:var(--muted);text-decoration:none;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+.pages a[aria-current]{color:var(--fg);background:rgba(106,169,255,.18);border-color:rgba(106,169,255,.5)}
+.top{position:fixed;top:16px;left:16px;right:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;z-index:5;pointer-events:none}
+.top > *{pointer-events:auto}
+.brand{font-weight:600;letter-spacing:.02em;font-size:15px;text-shadow:0 1px 8px #000}
+.brand span{color:var(--taxi)}
+.card{position:fixed;left:16px;top:64px;width:min(340px,calc(100vw - 32px));background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:12px;padding:16px;z-index:5;transition:opacity .4s,transform .4s}
+.card h1{font-size:20px;margin:0 0 4px;letter-spacing:-.01em}
+.card p{margin:0 0 12px;color:var(--muted);font-size:13px}
+.field{display:grid;grid-template-columns:44px 1fr;align-items:center;gap:8px;margin-bottom:8px}
+.field label{color:var(--muted);font-size:12px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.06em}
+select,button,input{font:inherit;font-size:14px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.06);color:var(--fg)}
+select:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--taxi);outline-offset:2px}
+button{cursor:pointer}
+button.go{width:100%;margin-top:6px;background:var(--taxi);border-color:var(--taxi);color:#06101c;font-weight:600;font-size:15px;padding:10px}
+.seg{display:flex;gap:4px;margin-top:10px}
+.seg button{flex:1;padding:6px;font-size:12px}
+.seg button[aria-pressed="true"]{background:rgba(106,169,255,.2);border-color:rgba(106,169,255,.6)}
+.quote{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0 2px}
+.quote div{background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:8px;padding:8px}
+.quote b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.quote span{font-size:11px;color:var(--muted)}
+body.flying .card{opacity:0;transform:translateX(-12px);pointer-events:none}
+.hud{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);display:flex;gap:2px;z-index:5;background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border:1px solid var(--line);border-radius:12px;padding:10px 6px;opacity:0;transition:opacity .4s;max-width:calc(100vw - 32px);overflow-x:auto}
+body.flying .hud,body.arrived .hud{opacity:1}
+.hud div{padding:0 14px;border-right:1px solid var(--line);white-space:nowrap}
+.hud div:last-child{border:0}
+.hud small{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.hud b{font-size:20px;font-variant-numeric:tabular-nums;font-weight:500}
+.hud .phase b{color:var(--taxi)}
+.controls{position:fixed;right:16px;bottom:22px;display:flex;flex-direction:column;gap:6px;z-index:5;opacity:0;transition:opacity .4s}
+body.flying .controls{opacity:1}
+.controls button{font-size:12px;padding:6px 10px;background:var(--panel);backdrop-filter:blur(8px)}
+.controls button[aria-pressed="true"]{border-color:rgba(106,169,255,.7);color:#fff}
+/* cabin view: a window frame and glass glare */
+.cabin{position:fixed;inset:0;pointer-events:none;z-index:4;opacity:0;transition:opacity .6s;
+  background:radial-gradient(ellipse 72% 64% at 50% 46%,transparent 62%,rgba(0,0,0,.55) 74%,#05080b 80%)}
+.cabin::after{content:"";position:absolute;inset:0;background:linear-gradient(115deg,transparent 30%,rgba(255,255,255,.05) 38%,transparent 46%)}
+body.cabinview.flying .cabin{opacity:1}
+.vignette{position:fixed;inset:0;pointer-events:none;z-index:3;background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.45))}
+.arrive{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) scale(.96);width:min(420px,calc(100vw - 32px));background:var(--panel);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:14px;padding:20px;z-index:6;opacity:0;pointer-events:none;transition:opacity .5s,transform .5s}
+body.arrived .arrive{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto}
+.arrive h2{margin:0 0 4px;font-size:22px}
+.arrive .saved{font-size:40px;font-weight:600;color:var(--accent);font-variant-numeric:tabular-nums;margin:8px 0 0}
+.arrive .row{display:flex;gap:8px;margin-top:14px}
+.arrive .row button{flex:1}
+.expand{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.expand h3{margin:0 0 4px;font-size:14px}
+.expand form{display:flex;gap:6px;margin-top:8px}
+.expand input{flex:1;min-width:0}
+.expand .fine{font-size:11px;color:var(--muted);margin-top:6px}
+.note{font-size:11px;color:var(--muted)}
+.loading{position:fixed;inset:0;display:grid;place-items:center;z-index:9;background:var(--bg);color:var(--muted);transition:opacity .5s}
+.maplibregl-ctrl-attrib{font-size:10px}
+@media(max-width:640px){.hud div{padding:0 8px}.hud b{font-size:16px}.card{top:56px}}
+@media(prefers-reduced-motion:reduce){.card,.hud,.arrive{transition:none}}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="Air-taxi flight over Seattle"></div>
+<div class="vignette"></div>
+<div class="cabin"></div>
+<div class="loading" id="loading">Preparing the Seattle sky…</div>
+
+<div class="top"><div class="brand">Sky<span>lanes</span> Ride</div><div id="nav"></div></div>
+
+<section class="card" aria-label="Book a flight">
+  <h1>Fly across Seattle</h1>
+  <p>An air taxi on the 800 / 1,000 ft lanes over the city's freeways. A 2035 concept on today's real map, buildings and airspace.</p>
+  <div class="field"><label for="from">From</label><select id="from" autocomplete="off"></select></div>
+  <div class="field"><label for="to">To</label><select id="to" autocomplete="off"></select></div>
+  <div class="quote"><div><b id="qAir">–</b><span>by air taxi</span></div><div><b id="qCar">–</b><span>by car, typical traffic</span></div></div>
+  <div class="note" id="qNote"></div>
+  <button class="go" id="go">Board and fly</button>
+  <div class="seg" role="group" aria-label="Camera"><button data-cam="chase" aria-pressed="true">Chase</button><button data-cam="cabin" aria-pressed="false">Cabin</button><button data-cam="orbit" aria-pressed="false">Orbit</button></div>
+</section>
+
+<div class="hud" aria-live="polite">
+  <div class="phase"><small>Phase</small><b id="hPhase">Boarding</b></div>
+  <div><small>Altitude</small><b id="hAlt">0</b> ft</div>
+  <div><small>Speed</small><b id="hSpd">0</b> kt</div>
+  <div><small>To go</small><b id="hDist">–</b> km</div>
+  <div><small>Arrive in</small><b id="hEta">–</b></div>
+</div>
+<div class="controls">
+  <button data-cam="chase" aria-pressed="true">Chase view</button>
+  <button data-cam="cabin" aria-pressed="false">Cabin view</button>
+  <button data-cam="orbit" aria-pressed="false">Orbit</button>
+  <button id="speed">Speed 3×</button>
+  <button id="abort">End flight</button>
+</div>
+
+<section class="arrive" aria-live="polite">
+  <div class="note" id="aRoute"></div>
+  <h2>You've arrived</h2>
+  <div class="saved" id="aSaved"></div>
+  <div class="note" id="aCompare"></div>
+  <div class="row"><button id="again">Fly back</button><button id="newtrip">New trip</button></div>
+  <div class="expand" id="expand"></div>
+</section>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.38/dist.min.js"></script>
+<script type="module" src="ride.js"></script>
+</body>
+</html>

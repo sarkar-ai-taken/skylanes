@@ -85,6 +85,8 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 @media(max-width:600px){.skypanel:not([open]){width:auto}}
 .games{list-style:none;margin:8px 0 0;padding:0;font-size:12px;display:flex;flex-direction:column;gap:3px}
 .games li{display:grid;grid-template-columns:7.5em 1fr;gap:6px}.games li.now{color:var(--crit);font-weight:600}.games time{font-family:var(--mono);color:var(--muted)}
+.pages{display:flex;gap:4px;margin-left:auto}.pages a{color:var(--muted);text-decoration:none;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
+.pages a[aria-current]{color:var(--fg);border-color:var(--accent)}
 .toast{max-width:min(520px,calc(100vw - 32px));position:fixed;bottom:16px;right:16px;background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:4px;font-size:13px;z-index:10}
 .maplibregl-popup-content{background:var(--panel);color:var(--fg);font-family:var(--font);font-size:12px}
 .loading{position:absolute;inset:0;display:grid;place-items:center;background:var(--panel);z-index:3;color:var(--muted)}
@@ -94,6 +96,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 <body>
 <header>
   <div><div class="eyebrow">Corridor · delivery route safety case · Seattle</div><h1>Draw the route, file the waiver</h1></div>
+  <nav class="pages"><a href="index.html" aria-current="page">Plan a route</a><a href="ride.html">Ride</a><a href="fleet.html">Fleet</a></nav>
   <div class="note" id="dataNote">Loading public data…</div>
 </header>
 

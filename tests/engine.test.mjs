@@ -157,3 +157,17 @@ test('every sample route altitude is a selectable level', async () => {
   const html = readFileSync(new URL('../app/index.html', import.meta.url), 'utf8');
   for (const R of (await import('../app/routes.js')).ROUTES) assert.ok(html.includes(`<option value="${R.altFt}"`), `${R.id} ${R.altFt}`);
 });
+
+test('air-taxi routing follows the lanes and falls back to direct when they would double the trip', async () => {
+  const { laneGraph, routeOnLanes, TIERS } = await import('../app/engine.js');
+  const { VERTIPORTS } = await import('../app/vertiports.js');
+  const lanes = load('lanes');
+  const G = laneGraph(D, lanes, 1, TIERS[1].levels[0]);
+  assert.ok(G.nodes.length > 50, `nodes ${G.nodes.length}`);
+  const at = id => VERTIPORTS.find(v => v.id === id).at;
+  const r = routeOnLanes(D, G, at('northgate'), at('sodo'));
+  assert.ok(!r.direct && r.onLanesM > 5000, `on lanes ${r.onLanesM}`);
+  assert.ok(r.totalM < 2 * 14500);
+  const short = routeOnLanes(D, G, at('center'), at('slu'));
+  assert.ok(short.direct || short.totalM < 2 * 1500);
+});

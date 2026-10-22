@@ -40,10 +40,11 @@ function offset(D, pts, side, z) {
   });
 }
 
-export function createScene(map, D, raw) {
+/** consumer: hide the planner's regulatory layers (ceilings, Category 5, obstacles, heliports) for the ride view. */
+export function createScene(map, D, raw, { consumer = false } = {}) {
   const overlay = new MapboxOverlay({ interleaved: true, layers: [], effects: [lighting] });
   map.addControl(overlay);
-  let r = null, route = [], visible = true, t0 = performance.now(), raf = 0, live = { events: null, tfr: null };
+  let r = null, route = [], visible = true, t0 = performance.now(), raf = 0, live = { events: null, tfr: null }, extra = null, alwaysAnimate = false;
 
   // Sky lanes: pieces in 3D, each with metre lengths for placing traffic.
   const lanes = (raw.lanes || []).map(ln => {
@@ -84,7 +85,7 @@ export function createScene(map, D, raw) {
     const alt = r ? r.altFt / FT : 91;
     // Only obstacles the engine flagged for this route turn red.
     const hits = new Set(r ? r.obstacles.map(o => o.id) : []);
-    const L = [
+    const L = consumer ? [] : [
       new SolidPolygonLayer({ id: 'cat5', data: cat5, getPolygon: d => d, getFillColor: [...RED, 26], extruded: false, parameters: GLASS }),
       // Controlled airspace: a glass block per facility map cell, as tall as its LAANC ceiling.
       new PolygonLayer({ id: 'ceilings', data: ceilings, getPolygon: d => d.poly, extruded: true, wireframe: true, stroked: false,
@@ -117,6 +118,7 @@ export function createScene(map, D, raw) {
         getColor: h => [...TIERS[h.v.ln.t].color, 150], getWidth: 2, parameters: GLASS }));
       L.push(new ScatterplotLayer({ id: 'traffic', data: heads, getPosition: h => h.p, getRadius: 9, radiusMinPixels: 2, getFillColor: h => [...TIERS[h.v.ln.t].color.map(c => Math.min(255, c + 60)), 255] }));
     }
+    if (extra) L.push(...extra(now));
     if (!r) return L;
 
     const pts = route, last = r.samples.length - 1;
@@ -161,7 +163,7 @@ export function createScene(map, D, raw) {
   function frame(now) {
     if (!visible) return;
     overlay.setProps({ layers: layers(now) });
-    const moving = r || net.vehicles.length;
+    const moving = r || net.vehicles.length || alwaysAnimate;
     raf = moving && !matchMedia('(prefers-reduced-motion: reduce)').matches ? requestAnimationFrame(frame) : 0;
   }
   const kick = () => { cancelAnimationFrame(raf); frame(performance.now()); };
@@ -172,6 +174,8 @@ export function createScene(map, D, raw) {
     tooltip: overlay,
     /** on/off, per-tier visibility, traffic percent. Returns vehicles airborne and capacity. */
     setLive(l) { live = l; kick(); },
+    /** Extra layers drawn every frame by another page (the ride vehicle, fleet drones); animate keeps frames coming. */
+    setExtra(fn, animate = true) { extra = fn; alwaysAnimate = animate; kick(); },
     setNetwork({ on = net.on, tiers = net.tiers, pct = net.pct } = {}) { Object.assign(net, { on, tiers, pct }); refreshNet(); kick(); return { airborne: net.vehicles.length, capacity: net.capacity }; },
   };
 }
