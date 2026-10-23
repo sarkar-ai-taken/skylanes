@@ -21,6 +21,9 @@ export const TOD = {
   day: { label: 'weekday daytime (0.55 × residents + jobs)', res: 0.55, jobs: 1 },
   event: { label: 'event day at a stadium (daytime + crowd)', res: 0.55, jobs: 1, crowd: true },
 };
+// The clock hour each preset stands for where an hourly layer (road counts) needs one.
+export const TOD_HOUR = { night: 3, day: 13, event: 17 };
+export const DAY_TYPES = ['weekday', 'weekend'];
 
 // Fallback density thresholds (people/km²) used only outside the FAA Operating Categories Map coverage.
 export const CAT_THRESHOLDS = [50, 500, 2500, 10000];
@@ -43,7 +46,8 @@ function decode(b64, Type) {
 }
 
 // Only manifest is required; a page that needs just lanes and traffic can leave the other layers out.
-export function prepare({ grid = { tiles: [] }, obstacles = [], powerlines = { features: [] }, sites = [], airspace = {}, manifest, buildings = [], traffic = null, wind = null }) {
+export function prepare({ grid = { tiles: [] }, obstacles = [], powerlines = { features: [] }, sites = [], airspace = {}, manifest, buildings = [], traffic = null, wind = null,
+  diurnal = null, noise311 = null, roadcounts = null, cellular = null }) {
   const [W, S, E, N] = manifest.bbox;
   const lat0 = (S + N) / 2, lon0 = (W + E) / 2;
   const mLon = 111320 * Math.cos(lat0 * Math.PI / 180), mLat = 110574;
@@ -64,6 +68,10 @@ export function prepare({ grid = { tiles: [] }, obstacles = [], powerlines = { f
     classB: polys(airspace.class_b || []),
     traffic: traffic && { ...traffic, density: traffic.density.map(b => decode(b, Float32Array)), rotor: traffic.rotor.map(b => decode(b, Float32Array)) },
     wind: wind && { ...wind, xy: wind.points.map(proj) },
+    diurnal,
+    noise: noise311 && { ...noise311, byKey: new Map(Array.from({ length: noise311.cells.length / 6 }, (_, n) => [noise311.cells[n * 6] + noise311.cells[n * 6 + 1] * noise311.nx, noise311.cells[n * 6 + 2]])) },
+    roads: roadcounts && { ...roadcounts, lines: roadcounts.segs.map(s => ({ ...s, xy: s.coords.map(proj) })) },
+    cell: cellular && { ...cellular, byKey: new Map(cellular.dx.map((dx, n) => [dx * cellular.ny + cellular.dy[n], n])) },
   };
 }
 
@@ -175,22 +183,96 @@ function cellOf(D, xy) {
 export const coverage = (D, xy) => ['ok', 'water', 'nodata', 'unloaded'][cellOf(D, xy).state];
 
 /** People per km² on the ground at xy: 3×3-cell (300 m) mean of the 100 m grid, so one tall block does not set the category. */
-export function density(D, xy, tod = 'day') {
-  const g = D.grid, m = TOD[tod], [lon, lat] = D.unproj(xy);
+export const density = (D, xy, tod = 'day') => weighted(D, xy, TOD[tod]);
+/** The two parts every density weights: 3×3-cell means of residents and of jobs per km² at xy. */
+export function cellMeans(D, xy) {
+  const g = D.grid, [lon, lat] = D.unproj(xy);
   const i0 = Math.floor((lon - g.west) / g.dlon), j0 = Math.floor((lat - g.south) / g.dlat);
-  let sum = 0, n = 0;
+  let res = 0, jobs = 0, n = 0;
   for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
     const c = cellAt(D, i0 + di, j0 + dj);
-    if (c.state === 0) { sum += m.res * c.t.residents[c.k] + m.jobs * c.t.jobs[c.k]; n++; }
+    if (c.state === 0) { res += c.t.residents[c.k]; jobs += c.t.jobs[c.k]; n++; }
     else if (c.state === 1) n++; // water counts as empty; missing data does not count at all
   }
-  let v = n ? sum / n : 0;
-  if (m.crowd) for (const s of D.sites) if (s.kind === 'stadium' && s.tfr) {
-    const d = hyp(xy, s.xy);
-    if (d < CROWD_R) v += CROWD / (Math.PI * (CROWD_R / 1000) ** 2) * (1 - d / CROWD_R);
-  }
+  return n ? [res / n, jobs / n] : [0, 0];
+}
+/** Stadium crowd per km² at xy (stadiums with a TFR, cone to CROWD_R). */
+function crowdAt(D, xy) {
+  let v = 0;
+  for (const s of D.sites) if (s.kind === 'stadium' && s.tfr) { const d = hyp(xy, s.xy); if (d < CROWD_R) v += CROWD / (Math.PI * (CROWD_R / 1000) ** 2) * (1 - d / CROWD_R); }
   return v;
 }
+const weighted = (D, xy, w, mn = cellMeans(D, xy)) => w.res * mn[0] + w.jobs * mn[1] + (w.crowd ? crowdAt(D, xy) : 0);
+
+// ---------- Hourly ground population (ATUS diurnal curves, pipeline/diurnal.py) ----------
+const mod24 = h => ((h % 24) + 24) % 24;
+export const hhmm = h => { const m = Math.round(mod24(h) * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
+/**
+ * Weights on residents and jobs at clock hour h (fractions interpolate): the ATUS share of people at home, the share of
+ * jobs whose holder is at work, and the share out or travelling spread over job cells × k (residents / jobs) as a proxy
+ * for shops, schools and the roads between them. Without the layer: the night preset 22–06, else the day preset.
+ */
+export function hourWeights(D, hour, dayType = 'weekday') {
+  const P = D.diurnal?.[dayType], h = mod24(hour);
+  if (!P) { const m = TOD[h >= 6 && h < 22 ? 'day' : 'night']; return { res: m.res, jobs: m.jobs, preset: true }; }
+  const k = D.diurnal.spread.k, h0 = Math.floor(h), f = h - h0, at = i => [P.resHome[i], P.jobsAtWork[i] + (P.out[i] + P.travel[i]) * k];
+  const [r0, j0] = at(h0), [r1, j1] = at((h0 + 1) % 24);
+  return { res: r0 + (r1 - r0) * f, jobs: j0 + (j1 - j0) * f };
+}
+/** People per km² at xy at a clock hour on a weekday or weekend day (same 300 m smoothing as density). */
+export const densityAt = (D, xy, hour, dayType = 'weekday', crowd = false) => weighted(D, xy, { ...hourWeights(D, hour, dayType), crowd });
+
+/** Circular runs of hours where pred holds: [{ from, hours }]. */
+function hourRuns(pred) {
+  const on = Array.from({ length: 24 }, (_, h) => pred(h));
+  if (on.every(Boolean)) return [{ from: 0, hours: 24 }];
+  const s = on.indexOf(false), out = [];
+  for (let i = 1; i <= 24; i++) { const h = (s + i) % 24; if (!on[h]) continue; const last = out[out.length - 1]; if (last && (last.from + last.hours) % 24 === h) last.hours++; else out.push({ from: h, hours: 1 }); }
+  return out;
+}
+/**
+ * Best and worst operating windows in 24 hourly rows ({ h, peak, mean, cat }): best is the longest run at the lowest
+ * category (ties to the lower mean density), worst the run at the highest category holding its busiest hour.
+ */
+export function operatingWindows(H) {
+  const lo = Math.min(...H.map(x => x.cat)), hi = Math.max(...H.map(x => x.cat)), sum = w => Array.from({ length: w.hours }, (_, i) => H[(w.from + i) % 24].mean).reduce((a, b) => a + b, 0) / w.hours;
+  const best = hourRuns(h => H[h].cat === lo).sort((a, b) => b.hours - a.hours || sum(a) - sum(b))[0];
+  const busiest = H.reduce((a, x) => (x.mean > a.mean ? x : a)), quietest = H.reduce((a, x) => (x.mean < a.mean ? x : a));
+  const top = H.filter(x => x.cat === hi).reduce((a, x) => (x.mean > a.mean ? x : a));
+  const worst = hourRuns(h => H[h].cat === hi).find(w => (top.h - w.from + 24) % 24 < w.hours);
+  const win = (w, cat) => ({ from: w.from, to: (w.from + w.hours) % 24, hours: w.hours, cat, mean: sum(w) });
+  return { lo, hi, best: win(best, lo), worst: win(worst, hi), quietest: quietest.h, busiest: busiest.h };
+}
+export const windowText = w => (w.hours === 24 ? 'all day' : `${hhmm(w.from)}–${w.to === 0 ? '24:00' : hhmm(w.to)}`);
+/**
+ * Ground density by clock hour along a route from the 300 m means of its samples (cellMeans): per hour and day type the
+ * peak and mean density and the census category of the peak (catFromDensity; the FAA map, where it applies, is static),
+ * plus the operating windows. Stadium crowds are not in it. Null without the diurnal layer.
+ */
+export function hourlyProfile(D, means) {
+  if (!D.diurnal || !means.length) return null;
+  const out = {};
+  for (const dt of DAY_TYPES) out[dt] = Array.from({ length: 24 }, (_, h) => {
+    const w = hourWeights(D, h, dt); let peak = 0, sum = 0;
+    for (const [r, j] of means) { const v = w.res * r + w.jobs * j; sum += v; if (v > peak) peak = v; }
+    return { h, peak, mean: sum / means.length, cat: catFromDensity(peak) };
+  });
+  out.windows = Object.fromEntries(DAY_TYPES.map(dt => [dt, operatingWindows(out[dt])]));
+  return out;
+}
+/** Walk a [lon, lat] route every stepM metres: fn(xy, along, leg, dir unit vector) per point. Returns the length. */
+function walk(D, route, stepM, fn) {
+  const pts = route.map(p => D.proj(p)); let len = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1], L = hyp(a, b), n = Math.max(1, Math.ceil(L / stepM)), u = L ? [(b[0] - a[0]) / L, (b[1] - a[1]) / L] : [1, 0];
+    for (let s = 0; s < n; s++) fn([a[0] + (b[0] - a[0]) * s / n, a[1] + (b[1] - a[1]) * s / n], len + L * s / n, i, u);
+    len += L;
+  }
+  if (pts.length > 1) fn(pts[pts.length - 1], len, pts.length - 2, [1, 0]);
+  return len;
+}
+/** hourlyProfile for a [lon, lat] route on its own. */
+export function routeProfile(D, route, stepM = 25) { const m = []; walk(D, route, stepM, xy => m.push(cellMeans(D, xy))); return hourlyProfile(D, m); }
 export const isWater = (D, xy) => cellOf(D, xy).state === 1;
 
 /** FAA Operating Categories Map category at xy (rasterized to the grid; highest polygon wins), or null outside its coverage. */
@@ -279,6 +361,168 @@ export function windClimate(D, xy, altFt) {
     worstMonth: worst + 1, worstOver20: months[worst], year: C.year, hours: C.hours, dayHours: C.day_hours };
 }
 
+// ---------- Road users under the route (SDOT + WSDOT AADT, FHWA TMAS weekday hourly shape; pipeline/roadcounts.py) ----------
+// Assumptions: 1.5 persons per vehicle (between the NHTS 2017 commute and all-trip averages); free-flow speeds
+// 25 mph on Seattle arterials, 60 mph on interstates and US routes, 45 mph on other state routes.
+export const OCCUPANCY = 1.5;
+const ROAD_CELL = 250, isFreeway = ln => ln.src === 'wsdot' && /^(I-|US )/.test(ln.name);
+const roadSpeed = ln => (ln.src === 'sdot' ? 11.2 : isFreeway(ln) ? 26.8 : 20.1);
+const lerp24 = (a, h) => { const x = mod24(h), i = Math.floor(x), f = x - i; return a[i] + (a[(i + 1) % 24] - a[i]) * f; };
+function roadIndex(R) {
+  if (R.h) return R;
+  R.pairs = []; R.h = new Map();
+  R.lines.forEach((ln, k) => { for (let i = 0; i < ln.xy.length - 1; i++) {
+    const a = ln.xy[i], b = ln.xy[i + 1], s = R.pairs.push([k, a, b]) - 1;
+    for (let x = Math.floor(Math.min(a[0], b[0]) / ROAD_CELL); x <= Math.floor(Math.max(a[0], b[0]) / ROAD_CELL); x++)
+      for (let y = Math.floor(Math.min(a[1], b[1]) / ROAD_CELL); y <= Math.floor(Math.max(a[1], b[1]) / ROAD_CELL); y++) { const key = x + ',' + y; if (!R.h.has(key)) R.h.set(key, []); R.h.get(key).push(s); }
+  } });
+  return R;
+}
+function roadPairsNear(R, a, b, r) {
+  const out = new Set();
+  for (let x = Math.floor((Math.min(a[0], b[0]) - r) / ROAD_CELL); x <= Math.floor((Math.max(a[0], b[0]) + r) / ROAD_CELL); x++)
+    for (let y = Math.floor((Math.min(a[1], b[1]) - r) / ROAD_CELL); y <= Math.floor((Math.max(a[1], b[1]) + r) / ROAD_CELL); y++) for (const s of R.h.get(x + ',' + y) || []) out.add(s);
+  return out;
+}
+/** Where segments pq and ab cross: t along pq (0–1), or null. */
+function crossT(p, q, a, b) {
+  const r = [q[0] - p[0], q[1] - p[1]], s = [b[0] - a[0], b[1] - a[1]], den = r[0] * s[1] - r[1] * s[0];
+  if (!den) return null;
+  const t = ((a[0] - p[0]) * s[1] - (a[1] - p[1]) * s[0]) / den, u = ((a[0] - p[0]) * r[1] - (a[1] - p[1]) * r[0]) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? t : null;
+}
+/**
+ * Counted roads the route crosses or follows, and the road users under it. vph = daily volume × the TMAS weekday share of
+ * that hour (freeway curve for interstates and US routes, all-station curve otherwise; AWDT on weekdays where SDOT has
+ * it); with hour null, daily / 24. A road followed within bufferM at less than 45° for 50 m or more is a parallel
+ * stretch, one per count section (same name and count). Vehicles under the footprint = vph / speed × road length inside
+ * it, summed: a parallel stretch over its own length, a crossing over 2 × bufferM unless it lies in a followed stretch
+ * of the same road (then that stretch counts, over at least 2 × bufferM).
+ * Returns { crossings: [{ name, src, aadt, vph, at, along, leg, year }], parallel: [{ name, src, aadt, vph, lengthM, fromM, toM }],
+ * followed (distinct roads followed), vehUnder, peopleUnder, hour, dayType, bufferM }, or null without the layer.
+ * Only SDOT arterials and state highways are counted.
+ */
+export function roadCrossings(D, route, { hour = null, dayType = 'weekday', bufferM = 50, stepM = 25 } = {}) {
+  const R = D.roads; if (!R || route.length < 2) return null;
+  roadIndex(R);
+  const pts = route.map(p => D.proj(p));
+  const vph = ln => { const day = dayType === 'weekday' && ln.awdt ? ln.awdt : ln.aadt; return hour == null ? day / 24 : day * lerp24(R.hourly[isFreeway(ln) ? 'freeway' : 'all'], hour); };
+  const road = ln => ({ name: ln.name, src: ln.src, aadt: ln.aadt, vph: vph(ln), year: ln.counted ?? ln.year, speedMs: roadSpeed(ln), ...(ln.awdt_only ? { awdtOnly: true } : {}) });
+  const crossings = [];
+  let len = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p = pts[i], q = pts[i + 1], L = hyp(p, q);
+    for (const s of roadPairsNear(R, p, q, 0)) {
+      const [k, a, b] = R.pairs[s], t = crossT(p, q, a, b); if (t == null) continue;
+      const xy = [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t], ln = R.lines[k];
+      // one crossing per road: pieces of the same named road meeting at the crossing count once
+      if (crossings.some(c => c.name === ln.name && c.src === ln.src && hyp(c.xy, xy) < 30)) continue;
+      crossings.push({ ...road(ln), xy, at: D.unproj(xy).map(v => +v.toFixed(5)), along: len + L * t, leg: i });
+    }
+    len += L;
+  }
+  const par = new Map();
+  walk(D, route, stepM, (xy, along, leg, u) => {
+    const best = new Map(); // per road, the nearest section here: adjacent count sections overlap at their joints
+    for (const s of roadPairsNear(R, xy, xy, bufferM)) {
+      const [k, a, b] = R.pairs[s], L = hyp(a, b), d = segDist(xy, a, b);
+      if (!L || d > bufferM || Math.abs(((b[0] - a[0]) * u[0] + (b[1] - a[1]) * u[1]) / L) < Math.SQRT1_2) continue;
+      const ln = R.lines[k], nm = ln.src + ':' + ln.name, o = best.get(nm);
+      if (!o || d < o.d) best.set(nm, { ln, d });
+    }
+    for (const { ln } of best.values()) {
+      const key = `${ln.src}:${ln.name}:${ln.aadt}:${ln.awdt || 0}`, e = par.get(key) || par.set(key, { ln, at: new Set() }).get(key);
+      e.at.add(Math.round(along / stepM));
+    }
+  });
+  const nameLen = new Map();
+  for (const { ln, at } of par.values()) nameLen.set(ln.src + ':' + ln.name, (nameLen.get(ln.src + ':' + ln.name) || 0) + at.size * stepM);
+  const parallel = [...par.values()].filter(({ ln }) => nameLen.get(ln.src + ':' + ln.name) >= 50)
+    .map(({ ln, at }) => ({ ...road(ln), lengthM: at.size * stepM, fromM: Math.min(...at) * stepM, toM: Math.max(...at) * stepM, at }))
+    .sort((a, b) => b.vph * b.lengthM - a.vph * a.lengthM);
+  const perM = r => r.vph / (r.speedMs * 3600), inStretch = (p, c) => p.src === c.src && p.name === c.name && [...p.at].some(i => Math.abs(i * stepM - c.along) <= bufferM);
+  let vehUnder = 0;
+  const shallow = new Set();
+  for (const p of parallel) { const xs = crossings.filter(c => inStretch(p, c)); xs.forEach(c => shallow.add(c)); vehUnder += perM(p) * Math.max(p.lengthM, xs.length ? 2 * bufferM : 0); }
+  for (const c of crossings) if (!shallow.has(c)) vehUnder += perM(c) * 2 * bufferM;
+  crossings.sort((a, b) => a.along - b.along).forEach(c => delete c.xy);
+  parallel.forEach(p => delete p.at);
+  return { crossings, parallel, followed: new Set(parallel.map(p => p.src + ':' + p.name)).size, vehUnder, peopleUnder: vehUnder * OCCUPANCY, hour, dayType, bufferM,
+    peakHour: R.hourly.all.indexOf(Math.max(...R.hourly.all)) };
+}
+
+// ---------- Noise complaints (Seattle open data, 250 m cells; pipeline/noise311.py) ----------
+function inSeattle(N, lon, lat) {
+  const [w, s, e, n] = N.city_bbox;
+  return lon >= w && lon <= e && lat >= s && lat <= n && N.city.some(p => inRing(lon, lat, p[0]) && !p.slice(1).some(h => inRing(lon, lat, h)));
+}
+/** Keys of the 250 m cells whose centres lie within r metres of xy. */
+function noiseCells(D, xy, r, out = new Set()) {
+  const N = D.noise, [lon0, lat0] = D.unproj([xy[0] - r, xy[1] - r]), [lon1, lat1] = D.unproj([xy[0] + r, xy[1] + r]);
+  for (let j = Math.max(0, Math.floor((lat0 - N.south) / N.dlat)); j <= Math.min(N.ny - 1, Math.floor((lat1 - N.south) / N.dlat)); j++)
+    for (let i = Math.max(0, Math.floor((lon0 - N.west) / N.dlon)); i <= Math.min(N.nx - 1, Math.floor((lon1 - N.west) / N.dlon)); i++)
+      if (hyp(xy, D.proj([N.west + (i + 0.5) * N.dlon, N.south + (j + 0.5) * N.dlat])) <= r) out.add(i + j * N.nx);
+  return out;
+}
+/** Noise complaints in the cells within r metres of xy over the layer's window: { n, cells, inCity }, or null outside Seattle (no data, not zero). */
+export function complaintsNear(D, xy, r = 250) {
+  const N = D.noise; if (!N) return null;
+  const [lon, lat] = D.unproj(xy); if (!inSeattle(N, lon, lat)) return null;
+  const cells = noiseCells(D, xy, r);
+  return { n: [...cells].reduce((a, k) => a + (N.byKey.get(k) || 0), 0), cells: cells.size, inCity: true };
+}
+/**
+ * Noise-complaint baseline along a route: the union of cells within r of the in-city part. perKm over the in-city
+ * length; meanCell against the city's cell distribution: 'high' at p90 and above, 'elevated' from p75, else 'low'.
+ * covered is the share of the route inside Seattle; outside it there is no data. Null without the layer.
+ */
+export function noiseRoute(D, route, { stepM = 50, r = 250 } = {}) {
+  const N = D.noise; if (!N || route.length < 2) return null;
+  const cells = new Set(); let inC = 0, all = 0;
+  const lenM = walk(D, route, stepM, xy => { all++; const [lon, lat] = D.unproj(xy); if (inSeattle(N, lon, lat)) { inC++; noiseCells(D, xy, r, cells); } });
+  const st = N.city_cell_stats, hrs = N.hour, tot = hrs.reduce((a, b) => a + b, 0);
+  const base = { covered: inC / all, years: N.years, start: N.start, end: N.end, r, peakHour: hrs.indexOf(Math.max(...hrs)),
+    nightShare: tot ? [22, 23, 0, 1, 2, 3, 4, 5, 6].reduce((a, h) => a + hrs[h], 0) / tot : 0, stats: st };
+  if (!inC) return { ...base, n: 0, cells: 0, perKm: 0, meanCell: 0, maxCell: 0, level: null };
+  const v = [...cells].map(k => N.byKey.get(k) || 0), n = v.reduce((a, b) => a + b, 0), meanCell = n / v.length;
+  return { ...base, n, cells: v.length, perKm: n / Math.max(0.05, lenM * inC / all / 1000), meanCell, maxCell: Math.max(...v),
+    level: meanCell >= st.p90 ? 'high' : meanCell >= st.p75 ? 'elevated' : 'low' };
+}
+
+// ---------- C2 link: mobile coverage (Ookla open data, z16 tiles; pipeline/cellular.py) ----------
+const tileOf = (lon, lat, z) => [Math.floor((lon + 180) / 360 * 2 ** z), Math.floor((1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2 * 2 ** z)];
+/** Ookla mobile tile at xy: { d, u (kbps), lat (ms), tests, dev, key }, or null where nobody ran a test (not the same as no signal). */
+export function cellTile(D, xy) {
+  const C = D.cell; if (!C) return null;
+  const [x, y] = tileOf(...D.unproj(xy), C.z), dx = x - C.x0, dy = y - C.y0;
+  if (dx < 0 || dy < 0 || dx >= C.nx || dy >= C.ny) return null;
+  const n = C.byKey.get(dx * C.ny + dy);
+  return n == null ? null : { d: C.d[n], u: C.u[n], lat: C.lat[n], tests: C.tests_n[n], dev: C.dev[n], key: n };
+}
+/**
+ * Ground-level mobile performance along a route every stepM: measured = share of points on a tile with tests, good =
+ * share with download ≥ minKbps and latency ≤ maxLat, worst = the longest stretch that is not good and why. Null without the layer.
+ */
+export function cellAlong(D, route, { minKbps = 5000, maxLat = 100, stepM = 100 } = {}) {
+  const C = D.cell; if (!C || route.length < 2) return null;
+  const pts = [], tiles = new Map();
+  const lenM = walk(D, route, stepM, (xy, along) => {
+    const t = cellTile(D, xy), why = !t ? 'no measurements' : t.d < minKbps ? 'low throughput' : t.lat > maxLat ? `latency > ${maxLat} ms` : null;
+    if (t) tiles.set(t.key, t);
+    pts.push({ along, why });
+  });
+  let worst = null, run = null;
+  for (const p of [...pts, { along: lenM, why: null }]) {
+    if (p.why) { if (!run) run = { fromM: p.along, why: {} }; run.why[p.why] = (run.why[p.why] || 0) + 1; continue; }
+    if (run) { run.toM = Math.min(lenM, p.along); if (!worst || run.toM - run.fromM > worst.toM - worst.fromM) worst = run; run = null; }
+  }
+  const T = [...tiles.values()], med = a => { const s = a.slice().sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  return { quarter: C.quarter, license: C.license, minKbps, maxLat, points: pts.length,
+    measured: pts.filter(p => p.why !== 'no measurements').length / pts.length, good: pts.filter(p => !p.why).length / pts.length,
+    tiles: T.length, tests: T.reduce((a, t) => a + t.tests, 0), medDownMbps: T.length ? med(T.map(t => t.d)) / 1000 : null, minDownMbps: T.length ? Math.min(...T.map(t => t.d)) / 1000 : null,
+    medLatMs: med(T.map(t => t.lat)), worst: worst && { fromM: worst.fromM, toM: worst.toM, why: Object.entries(worst.why).sort((a, b) => b[1] - a[1])[0][0] } };
+}
+
 // ---------- Physics ----------
 /** Monte Carlo failure landings around xy. Returns [x, y] points in metres. */
 export function footprint(xy, altFt, ac, w, n, rnd) {
@@ -329,8 +573,11 @@ const isBlocked = (D, xy, alt, o, r = o.clearM) => tallestNear(D, xy, r) > alt -
  * and NOTAMs ({ id, kind, text, lon, lat, radius_nm, agl_ft, start, end }, from pipeline/notams.mjs).
  * `when` is the planned departure; both lists are optional and the score is unchanged without them.
  */
-export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', events = null, tfrs = [], notams = [], when = new Date(), ...opt } = {}) {
+export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WIND_PRESETS.typical, tod = 'day', hour = null, dayType = 'weekday', events = null, tfrs = [], notams = [], when = new Date(), ...opt } = {}) {
   const o = { ...DEFAULTS, ...opt }, ac = typeof aircraft === 'string' ? AIRCRAFT[aircraft] : aircraft;
+  // hour (0–24, local) switches the ground population from the TOD preset to the hourly model; the event crowd still applies
+  const W = hour == null ? TOD[tod] : { ...hourWeights(D, hour, dayType), crowd: TOD[tod]?.crowd };
+  const dens = (xy, mn) => weighted(D, xy, W, mn);
   index(D);
   const pts = route.map(p => D.proj(p)), alts = waypointAlts(route, altFt), rnd = rng(99);
   const samples = [], foot = [], footFrom = [], obst = new Map(), bld = new Map(), lines = new Map(), air = new Map(), noise = { hospital: 0, school: 0 };
@@ -341,9 +588,9 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   const notamPts = (notams || []).map(n => ({ n, xy: D.proj([n.lon, n.lat]), r: n.radius_nm ? n.radius_nm * 1852 : n.kind === 'obstacle' ? o.notamObstacleM : 1000 }));
   const notamHits = new Map();
   const sampleAt = (xy, along, alt) => {
-    const d = density(D, xy, tod), fc = faaCategory(D, xy);
+    const mn = cellMeans(D, xy), d = dens(xy, mn), fc = faaCategory(D, xy);
     const cov = coverage(D, xy), sf = surfaceNear(D, xy, o.clearM), un = sf && surfaceNear(D, xy, o.clearM, true), tr = trafficAt(D, xy, alt);
-    return { xy, ll: D.unproj(xy), along, alt, d, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: cov === 'water',
+    return { xy, ll: D.unproj(xy), along, alt, d, mn, c: fc ?? catFromDensity(d), faa: fc != null, ceiling: facilityCeiling(D, xy), water: cov === 'water',
       blocked: isBlocked(D, xy, alt, o), noData: cov === 'nodata' || cov === 'unloaded',
       surf: sf, unmapped: un, mapped: un ? tallestNear(D, xy, o.clearM, false) : 0, traffic: tr, land: landUse(D, xy), landing: nearOpenLand(D, xy, o.landingReachM) };
   };
@@ -387,7 +634,7 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
       if (along >= nextFoot) {
         nextFoot += o.footEveryM;
         for (const p of footprint(xy, alt, ac, wind, o.footN, rnd)) {
-          const pd = density(D, p, tod); foot.push(p); footFrom.push([xy, alt]); overSum += pd;
+          const pd = dens(p); foot.push(p); footFrom.push([xy, alt]); overSum += pd;
           if (pd >= o.denseKm2) hi++;
           if (isWater(D, p)) waterLandings++;
         }
@@ -409,7 +656,8 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   return {
     ...lidarSummary(samples, o), ...trafficSummary(D, samples, ac, o), ...landSummary(samples, lenM),
     climate: windClimate(D, samples[Math.floor(samples.length / 2)].xy, (altMin + altMax) / 2),
-    ac, altFt, alts, altMin, altMax, levelled: altMin !== altMax, wind, tod, opt: o, samples, foot, footFrom, lenM, minutes: hours * 60, maxCat,
+    ...phase1(D, route, samples, { hour, dayType, tod, W }),
+    ac, altFt, alts, altMin, altMax, levelled: altMin !== altMax, wind, tod, hour, dayType, opt: o, samples, foot, footFrom, lenM, minutes: hours * 60, maxCat,
     meanD: samples.reduce((a, s) => a + s.d, 0) / samples.length, peakD: Math.max(...samples.map(s => s.d)),
     faaShare: samples.filter(s => s.faa).length / samples.length,
     hiFrac: foot.length ? hi / foot.length : 0, waterFrac: foot.length ? waterLandings / foot.length : 0, meanUnder, ecPerFh, ecPerFlight: ecPerFh * hours,
@@ -424,6 +672,20 @@ export function scoreRoute(D, route, { aircraft = 'quad', altFt = 300, wind = WI
   };
 }
 
+/**
+ * The Phase 1 baselines: ground density by hour, road users, noise complaints and mobile coverage along the route.
+ * Each is null when its layer is not loaded. popLabel names the population model behind the samples.
+ */
+function phase1(D, route, samples, { hour, dayType, tod, W }) {
+  const crowd = W.crowd ? ' + stadium crowd' : '';
+  return {
+    popLabel: hour == null ? TOD[tod].label : `${dayType} ${hhmm(hour)} (${W.preset ? `no hourly layer: ${hourWeights(D, hour).res === 1 ? 'overnight' : 'daytime'} preset` : 'ATUS hourly model'}${crowd})`,
+    schoolHours: hour == null ? tod !== 'night' : dayType === 'weekday' && mod24(hour) >= 7 && mod24(hour) < 16,
+    hourly: hourlyProfile(D, samples.map(s => s.mn)),
+    roads: roadCrossings(D, route, { hour: hour ?? TOD_HOUR[tod], dayType: hour == null ? 'weekday' : dayType }),
+    complaints: noiseRoute(D, route), link: cellAlong(D, route),
+  };
+}
 /** True if a park, field or cemetery lies within r metres of xy (3×3 grid cells for r up to one cell). */
 function nearOpenLand(D, xy, r) {
   if (landUse(D, xy) == null) return null;
@@ -651,9 +913,27 @@ export function findings(r) {
     const o20 = c.over['20'];
     f.push([o20 > 0.1 ? 'warn' : 'good', `HRRR ${c.year}: the 80 m (262 ft) wind here exceeds 20 kt in ${pct(o20)} of daytime hours, worst in ${mon} (${pct(c.worstOver20)}); at ${c.altFt} ft the median is ${c.p50} kt and the 90th percentile ${c.p90} kt.`]);
   }
+  if (r.hourly) {
+    const w = r.hourly.windows.weekday, e = r.hourly.windows.weekend, ce = `weekends Cat ${e.lo}${e.hi > e.lo ? `–${e.hi}` : ''}`;
+    // census density above the governing (FAA map) category is a caution, never a pass
+    const top = Math.max(w.hi, e.hi), over = top > r.maxCat ? ` At its worst hour the census-derived category (Cat ${top}) is above the governing Category ${r.maxCat} (FAA map where it covers the route); the safety case should account for it.` : '';
+    if (w.hi > w.lo) f.push(['warn', `Ground population under the route changes with the hour (ATUS hourly model, census categories): weekdays Cat ${w.lo} ${windowText(w.best)} and Cat ${w.hi} ${windowText(w.worst)}; ${ce}. Scheduling in the Cat ${w.lo} window lowers ground risk; the FAA map category is static.${over}`]);
+    else f.push([over ? 'warn' : 'good', `Census-derived category is Cat ${w.hi} at every weekday hour (ATUS hourly model), ${ce}; mean density peaks at ${hhmm(w.busiest)} and is lowest at ${hhmm(w.quietest)}.${over}`]);
+  }
+  if (r.roads && (r.roads.crossings.length || r.roads.parallel.length)) {
+    const R = r.roads, big = [...R.crossings, ...R.parallel].sort((a, b) => b.aadt - a.aadt)[0], nc = R.crossings.length;
+    f.push([big.aadt >= 40000 || R.parallel.some(p => p.aadt >= 20000) ? 'warn' : 'good', `The route crosses counted roads ${nc} time${nc === 1 ? '' : 's'}${R.followed ? ` and follows ${R.followed} counted road${R.followed === 1 ? '' : 's'}` : ''} (busiest ${big.name}, ${big.aadt.toLocaleString('en-US')} vehicles/day): about ${R.vehUnder.toFixed(1)} vehicles, ${R.peopleUnder.toFixed(1)} people, under the footprint per flight at ${hhmm(R.hour)} on a ${R.dayType}. Cross roads at right angles and avoid following busy ones.`]);
+  }
+  const nc = r.complaints;
+  if (nc && nc.covered > 0) f.push([nc.level === 'high' ? 'warn' : 'good', `${nc.n.toLocaleString('en-US')} noise complaints within ${nc.r} m of the route's Seattle part over ${Math.round(nc.years)} years (${Math.round(nc.perKm)} per km; nearby cells average ${nc.meanCell.toFixed(1)} against a city p75 of ${nc.stats.p75} and p90 of ${nc.stats.p90}): ${nc.level} for Seattle. Complaints citywide peak at ${hhmm(nc.peakHour)}.`]);
+  const L = r.link;
+  if (L) {
+    const gap = L.worst ? `; longest stretch without a usable tile ${((L.worst.toM - L.worst.fromM) / 1000).toFixed(2)} km (${L.worst.why})` : '';
+    f.push([L.good >= 0.9 ? 'good' : 'warn', `Ookla ${L.quarter} ground-level mobile tests: ${pct(L.measured)} of the route measured, ${pct(L.good)} at ≥ ${L.minKbps / 1000} Mbps and ≤ ${L.maxLat} ms${gap}. Handset data at street level does not show the link at altitude; survey the C2 link along the corridor.`]);
+  }
   if (r.wind.kt >= 20) f.push(['warn', `${r.wind.kt} kt wind: failure drift up to ${Math.round(r.wind.kt * 0.5144 * 1.5 * (r.altMax / FT / r.ac.descent))} m downwind. Set a wind limit in the operations manual.`]);
   if (r.noise.hospital) f.push(['warn', `${Math.round(r.noise.hospital)} dB at a hospital, above a 55 dB daytime target.`]);
-  if (r.noise.school && r.tod !== 'night') f.push(['warn', `${Math.round(r.noise.school)} dB at ${r.noiseSites.filter(s => s.kind === 'school').length} school${r.noiseSites.filter(s => s.kind === 'school').length > 1 ? 's' : ''} during school hours.`]);
+  if (r.noise.school && (r.schoolHours ?? r.tod !== 'night')) f.push(['warn', `${Math.round(r.noise.school)} dB at ${r.noiseSites.filter(s => s.kind === 'school').length} school${r.noiseSites.filter(s => s.kind === 'school').length > 1 ? 's' : ''} during school hours.`]);
   return f;
 }
 export const verdict = f => (f.some(x => x[0] === 'crit') ? 'crit' : f.some(x => x[0] === 'warn') ? 'warn' : 'good');

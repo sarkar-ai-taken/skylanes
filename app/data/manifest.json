@@ -103,6 +103,34 @@
   "lanes": {
    "source": "OpenStreetMap highway=motorway|trunk|primary|secondary, scored with app/engine.js",
    "count": 24722
+  },
+  "diurnal": {
+   "source": "BLS American Time Use Survey 2023+2024 (where people are, by hour) + Census ACS 2020-2024 5-year (commute timing, work from home)",
+   "count": 15945,
+   "built": "2026-10-23",
+   "commuter_factor": 0.9004
+  },
+  "noise311": {
+   "source": "City of Seattle open data: SPD noise calls with a police response, SDCI noise complaints, Find It Fix It noise requests (geocoded only), 2023-10-01 to 2026-09-30, Seattle only",
+   "count": 20146,
+   "cells": 2272,
+   "cell_m": 250,
+   "built": "2026-10-23"
+  },
+  "roadcounts": {
+   "source": "SDOT 2024 Arterial Traffic Volumes + WSDOT Traffic Sections AADT (reporting year 2025, described by WSDOT as 2023 estimates); FHWA TMAS weekday hourly shape (WSDOT recorders, Apr + Oct 2024)",
+   "count": 3237,
+   "sdot": 1915,
+   "wsdot": 1322,
+   "sdot_awdt_only": 184,
+   "stations": 64,
+   "built": "2026-10-23"
+  },
+  "cellular": {
+   "source": "Speedtest by Ookla open data, mobile speed tests on tiles 2026-Q3 (CC BY-NC-SA 4.0, non-commercial)",
+   "count": 5746,
+   "tests": 39611,
+   "z": 16
   }
  }
 }

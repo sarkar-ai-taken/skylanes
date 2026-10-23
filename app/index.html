@@ -83,6 +83,11 @@ body[data-view="3d"] .layers,body[data-view="3d"] .legendplan,body:not([data-vie
 .sp-traffic select{background:#121920;color:#e6ebee;border-color:#2a3642;padding:3px 6px}
 body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
 @media(max-width:600px){.skypanel:not([open]){width:auto}}
+.hrs{display:grid;grid-template-columns:auto 1fr;gap:4px 8px;align-items:center;font-size:12px;color:var(--muted)}.hrs .seg{margin:0;cursor:pointer}
+.hrs .seg i.on{outline:2px solid var(--fg);outline-offset:-2px}.hrs-axis{grid-column:2;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px}
+.drop{display:block;border:1px dashed var(--line);border-radius:4px;padding:10px;margin-bottom:8px;text-align:center;font-size:12px;color:var(--muted);cursor:pointer}.drop.over{border-color:var(--accent);color:var(--fg)}
+.card .link{border:0;background:none;padding:0;color:var(--muted);text-decoration:underline;font-size:12px}
+#ridWarn{margin-top:8px;font-size:12px}
 .games{list-style:none;margin:8px 0 0;padding:0;font-size:12px;display:flex;flex-direction:column;gap:3px}
 .games li{display:grid;grid-template-columns:7.5em 1fr;gap:6px}.games li.now{color:var(--crit);font-weight:600}.games time{font-family:var(--mono);color:var(--muted)}
 .pages{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}.pages a{color:var(--muted);text-decoration:none;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line)}
@@ -129,6 +134,7 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
       <select id="alt" autocomplete="off" aria-label="Altitude"><option value="150">150 ft AGL</option><option value="200">200 ft AGL</option><option value="250">250 ft AGL</option><option value="300" selected>300 ft AGL</option><option value="350">350 ft AGL</option><option value="400">400 ft AGL</option></select>
       <select id="wind" autocomplete="off" aria-label="Wind"><option value="aloft" selected>Wind: live at altitude</option><option value="calm">Wind 5 kt S</option><option value="typical">Wind 12 kt SSW</option><option value="gusty">Wind 22 kt SSW gusting</option><option value="hrrr50">Wind: typical day here (HRRR median)</option><option value="hrrr90">Wind: windy day here (HRRR 90th pct)</option><option value="live">Wind: surface at KBFI</option></select>
       <select id="tod" autocomplete="off" aria-label="Time of day"><option value="day" selected>Weekday daytime</option><option value="night">Overnight</option><option value="event">Stadium event day</option></select>
+      <select id="hour" autocomplete="off" aria-label="Hour of day"></select>
       <button id="climb" title="Raise only the legs that hit something, up to 400 ft and the ceiling">Climb over</button>
       <button id="around" title="Find a path around buildings and obstacles at this altitude">Go around</button>
       <button id="view">Plan view</button>
@@ -141,6 +147,9 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
       <label><input type="checkbox" data-layer="faacat">FAA categories</label>
       <label><input type="checkbox" data-layer="surface">Lidar heights</label>
       <label><input type="checkbox" data-layer="crewed">Crewed traffic</label>
+      <label><input type="checkbox" data-layer="roadcounts">Road counts</label>
+      <label><input type="checkbox" data-layer="complaints">Noise complaints</label>
+      <label><input type="checkbox" data-layer="cellular">Mobile tests</label>
       <label><input type="checkbox" data-layer="laanc" checked>LAANC grid</label>
       <label><input type="checkbox" data-layer="obstacles" checked>Obstacles</label>
       <label><input type="checkbox" data-layer="power" checked>Power lines</label>
@@ -160,9 +169,17 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
     <div class="card"><h2>Route</h2><dl class="kv" id="routeKv"></dl>
       <div class="note" style="margin-top:6px">FAA category along the route</div><div class="seg" id="segbar"></div></div>
     <div class="card"><h2>Ground risk</h2><dl class="kv" id="riskKv"></dl></div>
+    <div class="card" id="todCard" hidden><h2>Ground by hour</h2>
+      <div class="hrs"><span>Weekday</span><div class="seg" id="hrsWd"></div><span>Weekend</span><div class="seg" id="hrsWe"></div>
+        <div class="hrs-axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div></div>
+      <div class="note" id="todNote"></div></div>
     <div class="card"><h2>Airspace and obstacles</h2><dl class="kv" id="airKv"></dl></div>
     <div class="card"><h2>Site data</h2><dl class="kv" id="siteKv"></dl>
-      <div class="note">3DEP lidar, OpenSky ADS-B (crewed traffic at the route's level), OSM land use, NOAA HRRR wind climatology.</div></div>
+      <div class="note">3DEP lidar, OpenSky ADS-B (crewed traffic at the route's level), OSM land use, NOAA HRRR wind climatology, SDOT and WSDOT road counts, Seattle noise complaints, Ookla ground-level mobile tests.</div></div>
+    <div class="card"><h2>Uncrewed traffic (Remote ID)</h2>
+      <label class="drop" id="ridDrop"><input type="file" id="ridFile" accept=".csv,.json,.txt" multiple hidden>Import a Remote ID log: Drone Scanner or OpenDroneID CSV. Click or drop.</label>
+      <dl class="kv" id="ridKv"></dl><ul class="findings" id="ridWarn"></ul>
+      <div class="note">Walk the corridor with the app at the hours you plan to fly. The log is read in this browser only: never uploaded and never in the share link. <button class="link" id="ridClear" hidden>Clear log</button></div></div>
     <div class="card"><h2>Live conditions</h2><dl class="kv" id="liveKv"><dt>Loading</dt><dd>…</dd></dl>
       <ul class="games" id="games"></ul><div class="note" id="liveNote"></div></div>
     <div class="card"><h2>Noise</h2><dl class="kv" id="noiseKv"></dl></div>
@@ -181,6 +198,8 @@ body:not([data-view="3d"]) .skypanel .sp-traffic{display:none}
   Prototype for planning and discussion. Not an FAA product and not a filed document; verify every finding before relying on it.
   Data: US Census Bureau (2020 blocks, LEHD LODES), FAA (Digital Obstacle File, UAS Facility Maps, ADDS), National Weather Service,
   USGS 3DEP (lidar and elevation), <a href="https://opensky-network.org">OpenSky Network</a> (historical ADS-B), NOAA HRRR via the University of Utah HRRR Zarr archive,
+  BLS American Time Use Survey and Census ACS (hourly population), City of Seattle open data (SDOT traffic volumes, SPD, SDCI and Find It Fix It noise complaints), WSDOT and FHWA TMAS (road counts),
+  Speedtest by Ookla Global Fixed and Mobile Network Performance Maps (CC BY-NC-SA 4.0, non-commercial),
   © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a> (ODbL), basemap by <a href="https://openfreemap.org">OpenFreeMap</a> / OpenMapTiles.
   <a href="https://github.com/sarkar-ai-taken/skylanes">Source on GitHub</a>.
 </footer>

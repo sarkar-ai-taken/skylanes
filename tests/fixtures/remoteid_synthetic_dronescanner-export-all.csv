@@ -1,0 +1,74 @@
+mac address
+6B:00:00:00:00:D4
+Location Message,MessageSource.BluetoothLegacy
+status,heightType,direction,speedHori,speedVert,droneLat,droneLon,altitudePressure,altitudeGeodetic,height,horizontalAccuracy,verticalAccuracy,baroAccuracy,speedAccuracy,timestamp,timeAccuracy
+AircraftStatus.Airborne,HeightType.Ground,90.0,8.25,0.0,47.614,-122.329,-1000.0,80.0,45.0,HorizontalAccuracy.meters_10,VerticalAccuracy.meters_3,VerticalAccuracy.meters_3,SpeedAccuracy.meter_per_second_1,1969-12-31 17:00:07.200,0.1
+BasicId Message,MessageSource.BluetoothLegacy
+idType,uaType,uasId
+IdType.Serial_Number,UaType.Helicopter_or_Multirotor,SYNTH0000000000000D4
+OperatorId Message,MessageSource.BluetoothLegacy
+operatorId
+FA3SYNTHOP4
+System Data Message,MessageSource.BluetoothLegacy
+operatorLocationType,classificationType,operatorLatitude,operatorLongitude,areaCount,areaRadius,areaCeiling,areaFloor,category,classValue,operatorAltitudeGeo,systemTimestamp
+OperatorLocationType.LiveGNSS,ClassificationType.Undeclared,47.615,-122.327,1,0,-1000.0,-1000.0,,,20.0,2026-10-20 18:11:59.700
+mac address
+6B:00:00:00:00:D4
+Location Message,MessageSource.BluetoothLegacy
+status,heightType,direction,speedHori,speedVert,droneLat,droneLon,altitudePressure,altitudeGeodetic,height,horizontalAccuracy,verticalAccuracy,baroAccuracy,speedAccuracy,timestamp,timeAccuracy
+AircraftStatus.Airborne,HeightType.Ground,90.0,8.25,0.0,47.6142,-122.3287,-1000.0,80.0,48.0,HorizontalAccuracy.meters_10,VerticalAccuracy.meters_3,VerticalAccuracy.meters_3,SpeedAccuracy.meter_per_second_1,1969-12-31 17:00:07.500,0.1
+BasicId Message,MessageSource.BluetoothLegacy
+idType,uaType,uasId
+IdType.Serial_Number,UaType.Helicopter_or_Multirotor,SYNTH0000000000000D4
+OperatorId Message,MessageSource.BluetoothLegacy
+operatorId
+FA3SYNTHOP4
+System Data Message,MessageSource.BluetoothLegacy
+operatorLocationType,classificationType,operatorLatitude,operatorLongitude,areaCount,areaRadius,areaCeiling,areaFloor,category,classValue,operatorAltitudeGeo,systemTimestamp
+OperatorLocationType.LiveGNSS,ClassificationType.Undeclared,47.615,-122.327,1,0,-1000.0,-1000.0,,,20.0,2026-10-20 18:12:29.700
+mac address
+6B:00:00:00:00:D4
+Location Message,MessageSource.BluetoothLegacy
+status,heightType,direction,speedHori,speedVert,droneLat,droneLon,altitudePressure,altitudeGeodetic,height,horizontalAccuracy,verticalAccuracy,baroAccuracy,speedAccuracy,timestamp,timeAccuracy
+AircraftStatus.Airborne,HeightType.Ground,90.0,8.25,0.0,47.6144,-122.3284,-1000.0,80.0,51.0,HorizontalAccuracy.meters_10,VerticalAccuracy.meters_3,VerticalAccuracy.meters_3,SpeedAccuracy.meter_per_second_1,1969-12-31 17:00:07.800,0.1
+BasicId Message,MessageSource.BluetoothLegacy
+idType,uaType,uasId
+IdType.Serial_Number,UaType.Helicopter_or_Multirotor,SYNTH0000000000000D4
+OperatorId Message,MessageSource.BluetoothLegacy
+operatorId
+FA3SYNTHOP4
+System Data Message,MessageSource.BluetoothLegacy
+operatorLocationType,classificationType,operatorLatitude,operatorLongitude,areaCount,areaRadius,areaCeiling,areaFloor,category,classValue,operatorAltitudeGeo,systemTimestamp
+OperatorLocationType.LiveGNSS,ClassificationType.Undeclared,47.615,-122.327,1,0,-1000.0,-1000.0,,,20.0,2026-10-20 18:12:59.700mac address
+6B:00:00:00:00:E5
+Location Message,MessageSource.BluetoothLegacy
+status,heightType,direction,speedHori,speedVert,droneLat,droneLon,altitudePressure,altitudeGeodetic,height,horizontalAccuracy,verticalAccuracy,baroAccuracy,speedAccuracy,timestamp,timeAccuracy
+AircraftStatus.Airborne,HeightType.Ground,90.0,8.25,0.0,47.591,-122.291,-1000.0,165.0,130.0,HorizontalAccuracy.meters_10,VerticalAccuracy.meters_3,VerticalAccuracy.meters_3,SpeedAccuracy.meter_per_second_1,1969-12-31 17:00:07.200,0.1
+BasicId Message,MessageSource.BluetoothLegacy
+idType,uaType,uasId
+IdType.Serial_Number,UaType.Helicopter_or_Multirotor,SYNTH0000000000000E5
+System Data Message,MessageSource.BluetoothLegacy
+operatorLocationType,classificationType,operatorLatitude,operatorLongitude,areaCount,areaRadius,areaCeiling,areaFloor,category,classValue,operatorAltitudeGeo,systemTimestamp
+OperatorLocationType.LiveGNSS,ClassificationType.Undeclared,47.59,-122.29,1,0,-1000.0,-1000.0,,,20.0,2026-10-20 19:11:59.700
+mac address
+6B:00:00:00:00:E5
+Location Message,MessageSource.BluetoothLegacy
+status,heightType,direction,speedHori,speedVert,droneLat,droneLon,altitudePressure,altitudeGeodetic,height,horizontalAccuracy,verticalAccuracy,baroAccuracy,speedAccuracy,timestamp,timeAccuracy
+AircraftStatus.Airborne,HeightType.Ground,90.0,8.25,0.0,47.5912,-122.2907,-1000.0,165.0,133.0,HorizontalAccuracy.meters_10,VerticalAccuracy.meters_3,VerticalAccuracy.meters_3,SpeedAccuracy.meter_per_second_1,1969-12-31 17:00:07.500,0.1
+BasicId Message,MessageSource.BluetoothLegacy
+idType,uaType,uasId
+IdType.Serial_Number,UaType.Helicopter_or_Multirotor,SYNTH0000000000000E5
+System Data Message,MessageSource.BluetoothLegacy
+operatorLocationType,classificationType,operatorLatitude,operatorLongitude,areaCount,areaRadius,areaCeiling,areaFloor,category,classValue,operatorAltitudeGeo,systemTimestamp
+OperatorLocationType.LiveGNSS,ClassificationType.Undeclared,47.59,-122.29,1,0,-1000.0,-1000.0,,,20.0,2026-10-20 19:12:29.700
+mac address
+6B:00:00:00:00:E5
+Location Message,MessageSource.BluetoothLegacy
+status,heightType,direction,speedHori,speedVert,droneLat,droneLon,altitudePressure,altitudeGeodetic,height,horizontalAccuracy,verticalAccuracy,baroAccuracy,speedAccuracy,timestamp,timeAccuracy
+AircraftStatus.Airborne,HeightType.Ground,90.0,8.25,0.0,47.5914,-122.2904,-1000.0,165.0,136.0,HorizontalAccuracy.meters_10,VerticalAccuracy.meters_3,VerticalAccuracy.meters_3,SpeedAccuracy.meter_per_second_1,1969-12-31 17:00:07.800,0.1
+BasicId Message,MessageSource.BluetoothLegacy
+idType,uaType,uasId
+IdType.Serial_Number,UaType.Helicopter_or_Multirotor,SYNTH0000000000000E5
+System Data Message,MessageSource.BluetoothLegacy
+operatorLocationType,classificationType,operatorLatitude,operatorLongitude,areaCount,areaRadius,areaCeiling,areaFloor,category,classValue,operatorAltitudeGeo,systemTimestamp
+OperatorLocationType.LiveGNSS,ClassificationType.Undeclared,47.59,-122.29,1,0,-1000.0,-1000.0,,,20.0,2026-10-20 19:12:59.700

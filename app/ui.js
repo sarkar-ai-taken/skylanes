@@ -1,5 +1,6 @@
 // Map, controls and rail. All scoring lives in engine.js; all document text in package.js.
-import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, missingTiles, routeBox, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, climateWind, rateText, MAX_ALT_FT } from './engine.js';
+import { AIRCRAFT, WIND_PRESETS, TOD, FT, TIERS, LANE_STATUS, laneStats, missingTiles, routeBox, prepare, scoreRoute, findings, verdict, noiseAt, intendedArea, catFromDensity, density, altLabel, planClimb, planAround, waypointAlts, climateWind, rateText, MAX_ALT_FT, hourWeights, hhmm, windowText } from './engine.js';
+import { parseRemoteIdLog, summarizeRemoteId, remoteIdFindings } from './remoteid.js';
 import { ROUTES } from './routes.js';
 import { sections, toHTML, toMarkdown, corridorId } from './package.js';
 import { createScene } from './scene3d.js';
@@ -12,18 +13,25 @@ const dark = () => document.documentElement.dataset.theme === 'dark' || (documen
 const fc = features => ({ type: 'FeatureCollection', features });
 const pt = (c, p = {}) => ({ type: 'Feature', properties: p, geometry: { type: 'Point', coordinates: c } });
 
-const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings', 'lanes'], optional = ['traffic', 'wind'];
+const files = ['grid', 'obstacles', 'powerlines', 'sites', 'airspace', 'manifest', 'buildings', 'lanes'], optional = ['traffic', 'wind', 'diurnal', 'noise311', 'roadcounts', 'cellular'];
 const raw = Object.fromEntries(await Promise.all([
   ...files.map(async n => [n, await (await fetch(`data/${n}.json`)).json()]),
   ...optional.map(async n => [n, await fetch(`data/${n}.json`).then(r => (r.ok ? r.json() : null)).catch(() => null)]),
 ]));
 const D = prepare(raw);
 const M = raw.manifest;
-$('dataNote').textContent = `Real data: census 2020 blocks, LEHD jobs, FAA obstacle file, UAS facility map, FAA operating categories, OSM land use${M.layers.heights ? ', USGS 3DEP lidar' : ''}${raw.traffic ? ', OpenSky ADS-B' : ''}${raw.wind ? ', NOAA HRRR wind' : ''}. Built ${M.built}.`;
+$('dataNote').textContent = `Real data: census 2020 blocks, LEHD jobs, FAA obstacle file, UAS facility map, FAA operating categories, OSM land use${M.layers.heights ? ', USGS 3DEP lidar' : ''}${raw.traffic ? ', OpenSky ADS-B' : ''}${raw.wind ? ', NOAA HRRR wind' : ''}${raw.diurnal ? ', ATUS hourly population' : ''}${raw.roadcounts ? ', SDOT and WSDOT road counts' : ''}${raw.noise311 ? ', Seattle noise complaints' : ''}${raw.cellular ? ', Ookla mobile speed tests' : ''}. Built ${M.built}.`;
 
 // ---------- Controls ----------
 $('route').innerHTML = '<option value="">Sample routes…</option>' + ROUTES.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
 $('aircraft').innerHTML = Object.entries(AIRCRAFT).map(([k, a]) => `<option value="${k}">${a.name}</option>`).join('');
+// Hour: '' keeps the time-of-day preset; wd17 / we17 score the ground at that clock hour (ATUS hourly model).
+const hours = p => Array.from({ length: 24 }, (_, h) => `<option value="${p}${h}">${p === 'wd' ? 'Weekday' : 'Weekend'} ${hhmm(h)}</option>`).join('');
+$('hour').innerHTML = '<option value="">Hour: preset</option>' + (raw.diurnal ? `<optgroup label="Weekday">${hours('wd')}</optgroup><optgroup label="Weekend">${hours('we')}</optgroup>` : '');
+if (!raw.diurnal) $('hour').hidden = true;
+const hourOf = v => (v ? { hour: +v.slice(2), dayType: v.startsWith('we') ? 'weekend' : 'weekday' } : { hour: null, dayType: 'weekday' });
+/** Weights on residents and jobs for the population shading: a TOD preset or an hour key. */
+const popWeights = k => TOD[k] || hourWeights(D, hourOf(k).hour, hourOf(k).dayType);
 let liveWind = null;
 const state = { route: [], finished: false, result: null };
 
@@ -38,9 +46,9 @@ window.corridorMap = map; // handle for debugging and tests
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
 
 // Population shading, one image per loaded grid tile.
-function densityImage(t, tod) {
+function densityImage(t, key) {
   const cv = document.createElement('canvas'); cv.width = t.w; cv.height = t.h;
-  const ctx = cv.getContext('2d'), img = ctx.createImageData(t.w, t.h), m = TOD[tod];
+  const ctx = cv.getContext('2d'), img = ctx.createImageData(t.w, t.h), m = popWeights(key);
   const cols = [null, [47, 143, 78], [127, 191, 106], [199, 129, 26], [216, 98, 42], [194, 59, 46]];
   for (let j = 0; j < t.h; j++) for (let i = 0; i < t.w; i++) {
     const k = j * t.w + i, o = ((t.h - 1 - j) * t.w + i) * 4;
@@ -127,7 +135,7 @@ function loadViewTiles() {
 const metresWidth = m => ['interpolate', ['exponential', 2], ['zoom'], 10, m / (156543.03 * Math.cos(47.62 * Math.PI / 180) / 2 ** 10), 20, m / (156543.03 * Math.cos(47.62 * Math.PI / 180) / 2 ** 20)];
 
 const LAYERS = {
-  get density() { return [...densityIds]; }, get surface() { return [...surfaceIds]; }, crewed: ['crewed'], faacat: ['faacat-fill', 'faacat-line'], laanc: ['laanc-line', 'laanc-label'], obstacles: ['obstacles'],
+  get density() { return [...densityIds]; }, get surface() { return [...surfaceIds]; }, crewed: ['crewed'], roadcounts: ['roadcounts'], complaints: ['complaints'], cellular: ['cellular'], faacat: ['faacat-fill', 'faacat-line'], laanc: ['laanc-line', 'laanc-label'], obstacles: ['obstacles'],
   power: ['power'], sites: ['sites'], foot: ['foot'], noise: ['noise'], area: ['area-fill', 'area-line'],
 };
 
@@ -163,6 +171,28 @@ map.on('load', () => {
     paint: { 'line-width': 3, 'line-opacity': 0.55, 'line-color': ['match', ['get', 's'], 'open', '#52c9a2', 'ceiling', '#eb8c50', '#ef6b5c'] } }, 'foot');
   map.addLayer({ id: 'routeBlocked', type: 'line', source: 'routeSeg', filter: ['==', ['get', 'b'], true], layout: { 'line-cap': 'round' },
     paint: { 'line-width': 11, 'line-color': css('--crit'), 'line-opacity': 0.55 } }, 'routeSeg');
+  // Phase 1 layers (plan view): counted roads by AADT, Seattle noise complaints per 250 m cell, Ookla mobile tiles by download
+  if (raw.roadcounts) {
+    map.addSource('roadcounts', { type: 'geojson', data: fc(raw.roadcounts.segs.map(s => ({ type: 'Feature', properties: { aadt: s.aadt, name: s.name, src: s.src }, geometry: { type: 'LineString', coordinates: s.coords } }))) });
+    map.addLayer({ id: 'roadcounts', type: 'line', source: 'roadcounts', layout: { visibility: 'none', 'line-cap': 'round' }, paint: { 'line-color': '#6aa9ff', 'line-opacity': 0.7, 'line-width': ['interpolate', ['linear'], ['get', 'aadt'], 2000, 0.6, 30000, 2.5, 200000, 6] } }, 'foot');
+  }
+  if (raw.noise311) {
+    const N = raw.noise311, cells = [];
+    for (let k = 0; k < N.cells.length; k += 6) cells.push(pt([N.west + (N.cells[k] + 0.5) * N.dlon, N.south + (N.cells[k + 1] + 0.5) * N.dlat], { n: N.cells[k + 2] }));
+    map.addSource('complaints', { type: 'geojson', data: fc(cells) });
+    map.addLayer({ id: 'complaints', type: 'circle', source: 'complaints', layout: { visibility: 'none' }, paint: { 'circle-color': css('--warn'), 'circle-opacity': 0.55, 'circle-radius': ['interpolate', ['linear'], ['sqrt', ['get', 'n']], 1, 1.5, 18, 12] } }, 'foot');
+  }
+  if (raw.cellular) {
+    const C = raw.cellular, Z = 2 ** C.z, ll = (x, y) => [(x + 0.5) / Z * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 0.5) / Z))) * 180 / Math.PI];
+    map.addSource('cellular', { type: 'geojson', data: fc(C.dx.map((dx, n) => pt(ll(C.x0 + dx, C.y0 + C.dy[n]), { d: C.d[n] / 1000, lat: C.lat[n] }))) });
+    map.addLayer({ id: 'cellular', type: 'circle', source: 'cellular', layout: { visibility: 'none' }, paint: { 'circle-radius': 3, 'circle-opacity': 0.8,
+      'circle-color': ['case', ['any', ['<', ['get', 'd'], 5], ['>', ['get', 'lat'], 100]], css('--crit'), ['<', ['get', 'd'], 25], css('--warn'), css('--good')] } }, 'foot');
+  }
+  for (const k of ['roadcounts', 'noise311', 'cellular']) if (!raw[k]) document.querySelector(`[data-layer="${{ noise311: 'complaints' }[k] || k}"]`)?.parentElement.remove();
+  // Remote ID log: one dot per position report by reported height, a ring per operator location (both views)
+  map.addSource('rid', { type: 'geojson', data: fc([]) });
+  map.addLayer({ id: 'rid', type: 'circle', source: 'rid', paint: { 'circle-radius': ['case', ['has', 'op'], 6, 3.5], 'circle-color': ['case', ['has', 'op'], 'rgba(0,0,0,0)', ['step', ['get', 'ft'], '#9aa6a1', 0, '#52c9a2', 200, '#f2b84b', 400, '#ef6b5c']],
+    'circle-stroke-color': ['case', ['has', 'op'], '#b08cff', css('--panel')], 'circle-stroke-width': ['case', ['has', 'op'], 2.5, 1] } });
   map.addLayer({ id: 'wps', type: 'circle', source: 'wps', paint: { 'circle-radius': 6, 'circle-color': css('--accent'), 'circle-stroke-color': css('--panel'), 'circle-stroke-width': 2 } });
 
   for (const id of ['obstacles', 'sites', 'power']) {
@@ -239,6 +269,7 @@ $('route').onchange = e => e.target.value && loadSample(e.target.value);
 function saveHash() {
   if (!state.finished || state.route.length < 2) return;
   const q = new URLSearchParams({ r: state.route.map(p => [p[0].toFixed(5), p[1].toFixed(5), ...(p.length > 2 ? [p[2]] : [])].join(',')).join(';'), ac: $('aircraft').value, alt: $('alt').value, w: $('wind').value, t: $('tod').value });
+  if ($('hour').value) q.set('h', $('hour').value); // old links without h keep the preset
   history.replaceState(null, '', '#' + q.toString());
 }
 function loadHash() {
@@ -246,7 +277,7 @@ function loadHash() {
   if (!r) return false;
   const pts = r.split(';').map(p => p.split(',').map(Number)).filter(p => (p.length === 2 || p.length === 3) && p.every(Number.isFinite));
   if (pts.length < 2) return false;
-  for (const [k, id] of [['ac', 'aircraft'], ['alt', 'alt'], ['w', 'wind'], ['t', 'tod']]) if (q.get(k) && $(id).querySelector(`option[value="${q.get(k)}"]`)) $(id).value = q.get(k);
+  for (const [k, id] of [['ac', 'aircraft'], ['alt', 'alt'], ['w', 'wind'], ['t', 'tod'], ['h', 'hour']]) if (q.get(k) && $(id).querySelector(`option[value="${q.get(k)}"]`)) $(id).value = q.get(k);
   state.route = pts; state.finished = true;
   fitRoute(pts);
   $('wind').value === 'live' ? $('wind').dispatchEvent(new Event('change')) : score();
@@ -270,7 +301,7 @@ function loadSample(id) {
   fitRoute(state.route);
   score();
 }
-['aircraft', 'alt', 'tod'].forEach(id => $(id).addEventListener('change', score));
+['aircraft', 'alt', 'tod', 'hour'].forEach(id => $(id).addEventListener('change', score));
 $('wind').addEventListener('change', async () => {
   if ($('wind').value === 'live' && !liveWind) {
     try {
@@ -325,7 +356,7 @@ document.querySelectorAll('[data-layer]').forEach(cb => cb.addEventListener('cha
 // ---------- 3D sky / plan view ----------
 // 3D draws the route, lane, footprints and airspace volumes with deck.gl; plan view uses the flat MapLibre layers and the layer toggles.
 let scene = null, view = '3d';
-const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg', 'routeBlocked', 'crewed'];
+const FLAT = ['laanc-line', 'laanc-label', 'obstacles', 'foot', 'noise', 'area-fill', 'area-line', 'routeSeg', 'routeBlocked', 'crewed', 'roadcounts', 'complaints', 'cellular'];
 function setView(v) {
   view = v;
   document.body.dataset.view = v;
@@ -361,16 +392,20 @@ $('tierRows').addEventListener('change', applyNetwork);
 
 // ---------- Scoring → map + rail + doc ----------
 function score() {
-  const tod = $('tod').value;
+  const tod = $('tod').value, { hour, dayType } = hourOf($('hour').value), popKey = $('hour').value || tod;
   // A route needs its grid tiles (plus room for failure footprints) before it can be scored.
   if (state.route.length > 1 && missingTiles(D, routeBox(D, state.route)).length) {
     $('hint').textContent = 'Loading population data for this area…';
     return ensureBox(D, routeBox(D, state.route)).then(() => { refreshDensity(); refreshSurface(); score(); });
   }
-  if (tod !== densityTod) refreshDensity(tod);
+  // with an hour set, the preset only decides whether the stadium event crowd is added
+  for (const o of $('tod').options) { o.dataset.l ??= o.textContent; o.textContent = hour == null ? o.dataset.l : o.value === 'event' ? `${o.dataset.l} (crowd added at ${hhmm(hour)})` : `${o.dataset.l} (no effect: hour set)`; }
+  if (popKey !== densityTod) refreshDensity(popKey);
   refreshSurface(); refreshTraffic();
-  state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod, events: live.events, tfrs: live.tfr?.tfrs || [], notams: live.notams?.notams || [], when: new Date() }) : null;
-  drawMap(); renderRail(); renderDoc(); saveHash();
+  state.result = state.route.length > 1 ? scoreRoute(D, state.route, { aircraft: $('aircraft').value, altFt: +$('alt').value, wind: wind(), tod, hour, dayType, events: live.events, tfrs: live.tfr?.tfrs || [], notams: live.notams?.notams || [], when: new Date() }) : null;
+  const rk = rid.ver + '|' + (state.route.length > 1 ? state.route.map(p => p[0] + ',' + p[1]).join(';') : '');
+  if (rk !== rid.key) { rid.key = rk; rid.summary = rid.records.length ? summarizeRemoteId(rid.records, state.route.length > 1 ? state.route : [], { radiusM: 500 }) : null; }
+  drawMap(); renderRail(); renderRid(); renderDoc(); saveHash();
   $('hint').textContent = state.route.length ? state.finished ? 'Route complete. Click a waypoint to set its altitude, or the map to start a new route.' : 'Keep clicking. Double-click to finish.' : 'Click to place waypoints. Double-click to finish.';
 }
 
@@ -394,7 +429,7 @@ const kv = (id, rows) => ($(id).innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><
 const n0 = x => Math.round(x).toLocaleString('en-US');
 function renderRail() {
   const r = state.result;
-  if (!r) { $('verdict').innerHTML = '<span class="pill warn">—</span><span>Draw a route</span>'; ['routeKv', 'riskKv', 'airKv', 'siteKv', 'noiseKv', 'segbar', 'findings'].forEach(i => ($(i).innerHTML = '')); return; }
+  if (!r) { $('verdict').innerHTML = '<span class="pill warn">—</span><span>Draw a route</span>'; ['routeKv', 'riskKv', 'airKv', 'siteKv', 'noiseKv', 'segbar', 'findings', 'hrsWd', 'hrsWe', 'todNote'].forEach(i => ($(i).innerHTML = '')); $('todCard').hidden = true; return; }
   const f = findings(r), v = verdict(f);
   $('verdict').innerHTML = `<span class="pill ${v}">Cat ${r.maxCat}</span><span>${v === 'crit' ? 'Not fileable as drawn' : v === 'warn' ? 'Fileable with mitigations' : 'Fileable'}</span>`;
   kv('routeKv', [['Corridor', corridorId(r)], ['Length', (r.lenM / 1000).toFixed(2) + ' km'], ['Flight time', r.minutes.toFixed(1) + ' min at ' + r.ac.spd + ' m/s'], ['Altitude', altLabel(r)], ['Wind', `${r.wind.kt} kt from ${r.wind.dir}°${r.wind.src ? ` (${r.wind.src})` : ''}`]]);
@@ -412,16 +447,72 @@ function renderRail() {
     ['Land use under route', r.land ? r.land.mix.slice(0, 2).map(([k, v]) => `${k} ${pc(v)}`).join(', ') : '—'],
     ['Longest gap, no landing site', r.land ? (r.land.landingGapM / 1000).toFixed(1) + ' km' : '—'],
     ['Daytime wind > 20 kt (80 m)', c ? `${pc(c.over['20'])} of hours, HRRR ${c.year}` : '—'],
+    ['Road users under route', r.roads ? `${r.roads.peopleUnder.toFixed(1)} at ${hhmm(r.roads.hour)}, ${r.roads.crossings.length} crossings` : '—'],
+    ['Noise complaints (Seattle)', !r.complaints ? '—' : r.complaints.covered ? `${n0(r.complaints.n)} in 3 yr, ${r.complaints.level}` : 'outside Seattle'],
+    ['Mobile tests on route', r.link ? `${pc(r.link.measured)} measured, ${pc(r.link.good)} good` : '—'],
   ]);
+  renderHours(r);
   kv('noiseKv', [['Source level', r.ac.src + ' dB @ 1 m'], ['Directly below', Math.round(noiseAt(0, r.altMin, r.ac)) + ' dB'], ['55 dB half-width', n0(r.halfWidth55) + ' m'], ['Hospitals ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'hospital').length], ['Schools ≥ 55 dB', r.noiseSites.filter(s => s.kind === 'school').length]]);
   $('findings').innerHTML = f.map(([c, t]) => `<li class="${c}">${t}</li>`).join('');
+}
+
+/** 24 cells per day type, coloured by census category and shaded by mean density; a click picks that hour. */
+function renderHours(r) {
+  const H = r.hourly, sel = $('hour').value;
+  $('todCard').hidden = !H;
+  if (!H) return;
+  const top = Math.max(...H.weekday.map(x => x.mean), ...H.weekend.map(x => x.mean));
+  for (const [id, dt, p] of [['hrsWd', 'weekday', 'wd'], ['hrsWe', 'weekend', 'we']])
+    $(id).innerHTML = H[dt].map(x => `<i class="c${x.cat}${sel === p + x.h ? ' on' : ''}" data-h="${p}${x.h}" style="opacity:${(0.3 + 0.7 * x.mean / top).toFixed(2)}" title="${dt} ${hhmm(x.h)} · Cat ${x.cat} · peak ${n0(x.peak)}, mean ${n0(x.mean)} /km²"></i>`).join('');
+  const w = H.windows.weekday, e = H.windows.weekend;
+  const say = (x, k) => (x.lo === x.hi ? `${k} Cat ${x.hi} at every hour` : `${k} best ${windowText(x.best)} (Cat ${x.lo}), worst ${windowText(x.worst)} (Cat ${x.hi})`);
+  const hiCat = Math.max(w.hi, e.hi);
+  $('todNote').textContent = `${say(w, 'Weekdays')}; ${say(e, 'weekends')}. Census categories by hour, shaded by mean density; the FAA map is static; the governing category is Cat ${r.maxCat}${hiCat > r.maxCat ? `, below the census Cat ${hiCat} here (see findings)` : ''}. Click an hour to score it. Now: ${r.popLabel}.`;
+}
+['hrsWd', 'hrsWe'].forEach(id => $(id).addEventListener('click', e => { const h = e.target.dataset?.h; if (h) { $('hour').value = $('hour').value === h ? '' : h; score(); } }));
+
+// ---------- Remote ID log import (stays in this browser: never uploaded, never in the share link) ----------
+const rid = { records: [], files: [], warnings: [], summary: null, ver: 0, key: null };
+const ridRecKey = r => [r.source, r.mac, r.id, r.t, r.lat, r.lon, r.heightM].join('|');
+async function importRid(files) {
+  const seen = new Set(rid.records.filter(r => r.t != null).map(ridRecKey));
+  for (const f of files) {
+    if (rid.files.includes(f.name)) { toast(`${f.name} is already imported`, 3000); continue; }
+    const recs = parseRemoteIdLog(await f.text(), { filename: f.name });
+    if (!recs.format) { toast(`${f.name}: not a Drone Scanner, OpenDroneID or exported JSON log`, 4000); continue; }
+    if (!recs.length) { toast(`${f.name}: no Remote ID records (${recs.warnings.join('; ') || 'empty log'})`, 5000); continue; }
+    // the same broadcasts under another file name (an export saved twice) are not counted again
+    const add = recs.filter(r => r.t == null || (!seen.has(ridRecKey(r)) && seen.add(ridRecKey(r))));
+    if (!add.length) { toast(`${f.name}: every record is already imported`, 4000); continue; }
+    rid.records = rid.records.concat(add); rid.files.push(f.name); rid.warnings.push(...recs.warnings.map(w => `${f.name}: ${w}`));
+    if (add.length < recs.length) rid.warnings.push(`${f.name}: ${recs.length - add.length} records already imported from another file, skipped`);
+  }
+  rid.ver++; score();
+}
+$('ridFile').addEventListener('change', e => { importRid([...e.target.files]); e.target.value = ''; });
+$('ridDrop').addEventListener('dragover', e => { e.preventDefault(); $('ridDrop').classList.add('over'); });
+$('ridDrop').addEventListener('dragleave', () => $('ridDrop').classList.remove('over'));
+$('ridDrop').addEventListener('drop', e => { e.preventDefault(); $('ridDrop').classList.remove('over'); importRid([...e.dataTransfer.files]); });
+$('ridClear').onclick = () => { Object.assign(rid, { records: [], files: [], warnings: [], summary: null, ver: rid.ver + 1 }); score(); };
+function renderRid() {
+  const S = rid.summary;
+  $('ridClear').hidden = !S;
+  map.getSource('rid')?.setData(fc(S ? [...rid.records.filter(x => x.lat != null && x.lon != null).map(x => pt([x.lon, x.lat], { ft: x.heightM == null ? -1 : x.heightM * FT })),
+    ...S.operators.map(o => pt([o.lon, o.lat], { op: 1 }))] : []));
+  if (!S) { $('ridKv').innerHTML = ''; $('ridWarn').innerHTML = ''; return; }
+  // with a route, the busiest hour counts reports near it (as the package does); without one, every report
+  const onRoute = state.route.length > 1, by = onRoute ? 'near' : 'obs', busy = S.byHour.filter(h => h[by]).sort((a, b) => b[by] - a[by])[0];
+  kv('ridKv', [['Files', rid.files.length], ['Broadcasts (with position)', `${S.records} (${S.withPosition})`], [`Aircraft / within ${S.radiusM} m`, `${S.uniqueAircraft} / ${onRoute ? S.aircraftNear : 'no route'}`],
+    ['Operator IDs', S.uniqueOperatorIds], ['Time span', S.span ? `${S.span.hours} h` : 'unknown'], [onRoute ? 'Busiest hour near route' : 'Busiest hour (all reports)', busy ? `${hhmm(busy.h)} Pacific (${busy[by]})` : '—'],
+    ['Reports above 400 ft', S.heightFt.filter(b => b.fromFt >= 400).reduce((n, b) => n + b.obs, 0)]]);
+  $('ridWarn').innerHTML = [...rid.warnings.slice(0, 4).map(w => ['warn', w]), ['good', remoteIdFindings(S).slice(-1)[0]]].map(([c, t]) => `<li class="${c}">${t.replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]))}</li>`).join('');
 }
 
 let doc = null;
 function renderDoc() {
   const r = state.result;
   if (!r) { doc = null; $('docBody').innerHTML = '<p class="note">The package appears once a route is scored.</p>'; return; }
-  doc = sections(D, r, intendedArea(D, r), undefined, live);
+  doc = sections(D, r, intendedArea(D, r), undefined, live, { remoteId: rid.summary && { summary: rid.summary, files: rid.files, warnings: rid.warnings } });
   $('docBody').innerHTML = toHTML(doc);
 }
 function save(name, text, type) {

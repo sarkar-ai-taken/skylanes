@@ -8,12 +8,14 @@ Outputs:
   airspace.json    FAA UAS facility map grid, Class B/C/D surface areas, FAA operating categories
   traffic.json     crewed-aircraft density per 1 km cell and altitude band, from historical ADS-B (adsb.py)
   wind.json        HRRR wind climatology per 3 km point (hrrr.py)
+  diurnal.json, noise311.json, roadcounts.json, cellular.json are written by their own scripts; build.py only notes
+  them in the manifest (`build.py --notes` does just that, after diurnal.py, which needs the tiles built here)
   manifest.json    source, retrieval date and record count for every layer
 
 Each population tile also carries OSM land use per 100 m cell and, where 3DEP lidar covers it (lidar.py), the surface
 height above ground per 50 m cell with a tree / structure flag.
 """
-import base64, csv, datetime, gzip, io, json, math, zipfile
+import base64, csv, datetime, gzip, io, json, math, re, sys, zipfile
 from array import array
 from pathlib import Path
 
@@ -540,7 +542,34 @@ def build_wind():
          len(pts), hours=int(day.sum()), months=len(files))
 
 
-if __name__ == "__main__":
+# ---------------------------------------------------------------- Phase 1 layers (built by their own scripts)
+def note_phase1():
+    """Manifest notes for the layers diurnal.py, noise311.py, roadcounts.py and cellular.py write; absent ones are skipped."""
+    def load(name):
+        p = OUT / f"{name}.json"
+        return json.loads(p.read_text()) if p.exists() else None
+
+    if d := load("diurnal"):
+        years = "+".join(sorted({m for f in d["sources"]["atus"]["files"] for m in re.findall(r"(\d{4})", f)}))
+        note("diurnal", f"BLS American Time Use Survey {years} (where people are, by hour) + Census {d['local']['acs']} (commute timing, work from home)",
+             d["weekday"]["n_diaries"] + d["weekend"]["n_diaries"], built=d["built"], commuter_factor=d["local"]["commuter_factor"])
+    if n := load("noise311"):
+        note("noise311", f"City of Seattle open data: SPD noise calls with a police response, SDCI noise complaints, Find It Fix It noise requests (geocoded only), {n['start']} to {n['end']}, Seattle only",
+             n["records"], cells=len(n["cells"]) // 6, cell_m=n["cell_m"], built=n["built"])
+    if r := load("roadcounts"):
+        src = [s["src"] for s in r["segs"]]
+        note("roadcounts", f"SDOT 2024 Arterial Traffic Volumes + WSDOT Traffic Sections AADT (reporting year {r['sources']['wsdot'].get('reporting_year')}, described by WSDOT as 2023 estimates); FHWA TMAS weekday hourly shape (WSDOT recorders, Apr + Oct 2024)",
+             len(src), sdot=src.count("sdot"), wsdot=src.count("wsdot"), sdot_awdt_only=sum(bool(s.get("awdt_only")) for s in r["segs"]), stations=r["hourly"]["stations"], built=r["built"])
+    if c := load("cellular"):
+        note("cellular", f"Speedtest by Ookla open data, mobile speed tests on tiles {c['quarter']} (CC BY-NC-SA 4.0, non-commercial)", c["count"], tests=c["tests"], z=c["z"])
+
+
+if __name__ == "__main__" and "--notes" in sys.argv:
+    # refresh only the Phase 1 notes in an existing manifest
+    manifest = json.loads((OUT / "manifest.json").read_text())
+    note_phase1()
+    (OUT / "manifest.json").write_text(json.dumps(manifest, indent=1))
+elif __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
     build_obstacles()
     build_buildings()
@@ -549,4 +578,5 @@ if __name__ == "__main__":
     build_grid()  # after build_airspace: rasterizes its polygons
     build_traffic()
     build_wind()
+    note_phase1()
     (OUT / "manifest.json").write_text(json.dumps(manifest, indent=1))
